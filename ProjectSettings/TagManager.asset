@@ -10,10 +10,10 @@ TagManager:
   - Default
   - TransparentFX
   - Ignore Raycast
-  - 
+  - Day
   - Water
   - UI
-  - 
+  - Night
   - 
   - 
   - 
@@ -42,4 +42,10 @@ TagManager:
   m_SortingLayers:
   - name: Default
     uniqueID: 0
+    locked: 0
+  - name: Day
+    uniqueID: 2612865021
+    locked: 0
+  - name: Night
+    uniqueID: 1492636319
     locked: 0
