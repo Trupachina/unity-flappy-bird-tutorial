@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.SceneManagement;
+using System.IO.Ports;
 
 [DefaultExecutionOrder(-1)]
 public class GameManager : MonoBehaviour
@@ -18,20 +19,24 @@ public class GameManager : MonoBehaviour
     public AudioClip dieSound; // Поле для звука смерти
 
     public int score { get; private set; } = 0;
-    public int lives { get; private set; } = 3; // Начальное количество жизней
+    public int lives = 3; // Начальное количество жизней
     private bool isGameOver = false; // Флаг для проверки состояния game over
     private AudioSource audioSource; // Компонент AudioSource
 
+    [Header("Serial Port Settings")]
+    public string comPort = "COM3"; // Укажите здесь COM-порт
+    private SerialPort portNo; // Порт для подключения SerialPort
+    private bool portIsOpen = false;
+
     private void Awake()
     {
-        if (Instance != null)
+        if (Instance != null && Instance != this)
         {
             Destroy(gameObject);
+            return;
         }
-        else
-        {
-            Instance = this;
-        }
+        Instance = this;
+        //DontDestroyOnLoad(gameObject); // Оставить GameManager при переходе между сценами, если требуется
     }
 
     private void Start()
@@ -45,12 +50,33 @@ public class GameManager : MonoBehaviour
         {
             audioSource = gameObject.AddComponent<AudioSource>();
         }
+
+        // Установка всех анимаций на UnscaledTime
+        Animator[] animators = FindObjectsOfType<Animator>();
+        foreach (Animator animator in animators)
+        {
+            animator.updateMode = AnimatorUpdateMode.UnscaledTime;
+        }
+
+        // Инициализация порта
+        portNo = new SerialPort(comPort, 19200); // Задайте нужный COM-порт
+        try
+        {
+            portNo.Open();
+            portNo.ReadTimeout = 1000;
+            portIsOpen = true;
+            Debug.Log("Serial Port открыт.");
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogError("Ошибка при открытии порта: " + ex.Message);
+        }
     }
 
     private void Update()
     {
         // Запуск игры по нажатию пробела, если кнопка play активна и не в состоянии game over
-        if (playButton.activeSelf && Input.GetKeyDown(KeyCode.Space) && !isGameOver)
+        if (playButton.activeSelf && Input.GetKeyDown(KeyCode.Space) && !isGameOver && lives > 0)
         {
             Play();
         }
@@ -61,10 +87,27 @@ public class GameManager : MonoBehaviour
             RestartScene();
         }
 
-        // Увеличение жизней по нажатию клавиши P
-        if (Input.GetKeyDown(KeyCode.P))
+        // Проверка порта на получение данных
+        if (portIsOpen)
         {
-            AddLife();
+            try
+            {
+                if (portNo.BytesToRead > 0)
+                {
+                    int portValue = portNo.ReadByte();
+                    Debug.Log("Получен байт: " + portValue);
+
+                    // Если получен сигнал для добавления жизни
+                    if (portValue == 1)
+                    {
+                        AddLife();
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogError("Ошибка при чтении порта: " + ex.Message);
+            }
         }
     }
 
@@ -89,7 +132,6 @@ public class GameManager : MonoBehaviour
         isGameOver = false; // Сбрасываем флаг game over
 
         Pipes[] pipes = FindObjectsOfType<Pipes>();
-
         for (int i = 0; i < pipes.Length; i++)
         {
             Destroy(pipes[i].gameObject);
@@ -115,6 +157,12 @@ public class GameManager : MonoBehaviour
             {
                 audioSource.PlayOneShot(dieSound);
             }
+
+            if (portNo != null && portNo.IsOpen)
+            {
+                portNo.Close();
+                Debug.Log("Serial Port закрыт.");
+            }
         }
         else
         {
@@ -130,10 +178,11 @@ public class GameManager : MonoBehaviour
     }
 
     // Метод для добавления жизней
-    public void AddLife()
+    private void AddLife()
     {
         lives++;
         UpdateLivesText();
+        Debug.Log("Добавлена жизнь. Текущее количество жизней: " + lives);
     }
 
     // Метод для обновления UI, отображающего количество жизней
@@ -141,7 +190,7 @@ public class GameManager : MonoBehaviour
     {
         if (livesText != null)
         {
-            livesText.text = "Lives: " + lives.ToString();
+            livesText.text = "Жизни: " + lives.ToString();
         }
     }
 
@@ -149,5 +198,14 @@ public class GameManager : MonoBehaviour
     private void RestartScene()
     {
         SceneManager.LoadScene(SceneManager.GetActiveScene().name);
+    }
+
+    private void OnApplicationQuit()
+    {
+        if (portNo != null && portNo.IsOpen)
+        {
+            portNo.Close();
+            Debug.Log("Serial Port закрыт.");
+        }
     }
 }
