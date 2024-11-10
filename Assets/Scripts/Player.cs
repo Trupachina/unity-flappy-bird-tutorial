@@ -6,14 +6,15 @@ public class Player : MonoBehaviour
     public float strength = 5f;
     public float gravity = -9.81f;
     public float tilt = 5f;
-    public AudioClip jumpSound; // Добавляем поле для звука прыжка
-    public AudioClip hitSound; // Добавляем поле для звука прыжка
-    public AudioClip scoreSound; // Добавляем поле для звука прыжка
+    public AudioClip jumpSound;
+    public AudioClip hitSound;
+    public AudioClip scoreSound;
 
     private SpriteRenderer spriteRenderer;
     private Vector3 direction;
     private int spriteIndex;
-    private AudioSource audioSource; // Добавляем компонент AudioSource
+    private AudioSource audioSource;
+    private bool isInvincible = false; // Флаг для неуязвимости игрока
 
     private void Awake()
     {
@@ -77,11 +78,12 @@ public class Player : MonoBehaviour
 
     private void OnTriggerEnter2D(Collider2D other)
     {
+        if (isInvincible) return; // Пропускаем столкновения, если включена неуязвимость
+
         if (other.gameObject.CompareTag("Obstacle"))
         {
             GameManager.Instance.GameOver();
             audioSource.PlayOneShot(hitSound);
-
         }
         else if (other.gameObject.CompareTag("Scoring"))
         {
@@ -97,5 +99,11 @@ public class Player : MonoBehaviour
         position.y = 0f; // Начальная высота
         transform.position = position;
         direction = Vector3.zero; // Сброс направления
+    }
+
+    // Метод для включения/выключения бессмертия
+    public void SetInvincibility(bool state)
+    {
+        isInvincible = state;
     }
 }

@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.SceneManagement;
 using System.IO.Ports;
+using System.Collections;
 
 [DefaultExecutionOrder(-1)]
 public class GameManager : MonoBehaviour
@@ -22,10 +23,11 @@ public class GameManager : MonoBehaviour
     public int lives = 3;
     private bool isGameOver = false;
     private bool isPausedAfterCollision = false; // Флаг для паузы после столкновения
+    private bool isInvincible = false;           // Флаг для бессмертия
     private AudioSource audioSource;
 
     [Header("Token Settings")]
-    public int livesPerToken = 1; // Количество жизней, добавляемых за один жетон
+    public int livesPerToken = 1;
 
     [Header("Serial Port Settings")]
     public string comPort = "COM3";
@@ -85,6 +87,7 @@ public class GameManager : MonoBehaviour
         if (isPausedAfterCollision && Input.GetKeyDown(KeyCode.Space))
         {
             isPausedAfterCollision = false;
+            StartCoroutine(GrantInvincibility(0.5f)); // Включение бессмертия на 1 секунду
             Play();
         }
 
@@ -118,9 +121,6 @@ public class GameManager : MonoBehaviour
 
     public void Play()
     {
-        //score = 0;
-        //scoreText.text = score.ToString();
-
         playButton.SetActive(false);
         gameOver.SetActive(false);
         logo.SetActive(false);
@@ -157,7 +157,7 @@ public class GameManager : MonoBehaviour
         {
             isPausedAfterCollision = true;
             player.ResetPosition();
-            Pause();  // Ставим паузу после сброса позиции, если жизни еще остались
+            Pause();
         }
     }
 
@@ -200,5 +200,16 @@ public class GameManager : MonoBehaviour
     {
         livesPerToken = amount;
         Debug.Log("Установлено количество жизней за жетон: " + livesPerToken);
+    }
+
+    private IEnumerator GrantInvincibility(float duration)
+    {
+        isInvincible = true; // Активируем бессмертие
+        player.SetInvincibility(true); // Включаем бессмертие для игрока, передавая параметр
+
+        yield return new WaitForSeconds(duration);
+
+        isInvincible = false; // Деактивируем бессмертие
+        player.SetInvincibility(false); // Выключаем бессмертие для игрока
     }
 }
