@@ -15,16 +15,30 @@ public class GameManager : MonoBehaviour
     [SerializeField] private Text livesText;
     [SerializeField] private GameObject playButton;
     [SerializeField] private GameObject gameOver;
+    [SerializeField] private Text gameOverScoreText;
     [SerializeField] private GameObject logo;
     [SerializeField] private GameObject company;
+    [SerializeField] private GameObject continueText;
+    [SerializeField] private Text timerText;
     public AudioClip dieSound;
+    [SerializeField] private GameObject lifeLostTextPrefab;
+    [SerializeField] private GameObject StartMusic;
+    [SerializeField] private GameObject PlayMusic;
+    [SerializeField] private GameObject GameOverMusic;
 
     public int score { get; private set; } = 0;
     public int lives = 3;
+    public int deathTimerSeconds = 5;
     private bool isGameOver = false;
-    private bool isPausedAfterCollision = false; // Флаг для паузы после столкновения
-    private bool isInvincible = false;           // Флаг для бессмертия
+    private bool isPausedAfterCollision = false;
+    private bool isInvincible = false;
     private AudioSource audioSource;
+    private Coroutine deathTimerCoroutine;
+    private bool awaitingSpaceToResume = false;
+
+    private const string HighScoreKey = "HighScore";
+    private const string VideoSceneName = "Visualization"; // Название сцены с видео
+    private const string StartSceneName = "Flappy Bird"; // Название стартовой сцены
 
     [Header("Token Settings")]
     public int livesPerToken = 1;
@@ -44,18 +58,16 @@ public class GameManager : MonoBehaviour
         Instance = this;
     }
 
-    private void Start()
+    public void Start()
     {
         Pause();
         UpdateLivesText();
 
         audioSource = GetComponent<AudioSource>() ?? gameObject.AddComponent<AudioSource>();
 
-        Animator[] animators = FindObjectsOfType<Animator>();
-        foreach (Animator animator in animators)
-        {
-            animator.updateMode = AnimatorUpdateMode.UnscaledTime;
-        }
+        StartMusic.SetActive(true);
+
+        SetAnimatorsUpdateMode(AnimatorUpdateMode.UnscaledTime);
 
         portNo = new SerialPort(comPort, 19200);
         try
@@ -69,6 +81,29 @@ public class GameManager : MonoBehaviour
         {
             Debug.LogError("Ошибка при открытии порта: " + ex.Message);
         }
+
+        // Проверка существования сцены перед её запуском
+        if (Application.CanStreamedLevelBeLoaded(VideoSceneName))
+        {
+            Debug.Log($"Сцена '{VideoSceneName}' найдена. Запуск через 15 секунд...");
+            StartCoroutine(StartCountdownToVideoScene(15));
+        }
+        else
+        {
+            Debug.LogError($"Сцена '{VideoSceneName}' не найдена! Проверьте имя сцены.");
+        }
+    }
+
+    private IEnumerator StartCountdownToVideoScene(int countdownTime)
+    {
+        while (countdownTime > 0)
+        {
+            Debug.Log($"До запуска сцены с видео осталось: {countdownTime} секунд...");
+            yield return new WaitForSeconds(1f);
+            countdownTime--;
+        }
+
+        LoadVideoScene();
     }
 
     private void Update()
@@ -78,17 +113,22 @@ public class GameManager : MonoBehaviour
             Play();
         }
 
-        if (isGameOver && Input.GetKeyDown(KeyCode.Space))
+        if (awaitingSpaceToResume && Input.GetKeyDown(KeyCode.Space))
         {
-            RestartScene();
+            awaitingSpaceToResume = false;
+            Play();
         }
 
-        // Проверка нажатия Space для продолжения игры после паузы при столкновении
         if (isPausedAfterCollision && Input.GetKeyDown(KeyCode.Space))
         {
             isPausedAfterCollision = false;
-            StartCoroutine(GrantInvincibility(0.5f)); // Включение бессмертия на 1 секунду
+            StartCoroutine(GrantInvincibility(0.5f));
             Play();
+        }
+
+        if (Input.GetKeyDown(KeyCode.L))
+        {
+            AddLife();
         }
 
         if (portIsOpen)
@@ -111,6 +151,38 @@ public class GameManager : MonoBehaviour
                 Debug.LogError("Ошибка при чтении порта: " + ex.Message);
             }
         }
+
+        // Проверка на возврат на стартовую сцену из видео-сцены
+        if (SceneManager.GetActiveScene().name == VideoSceneName && Input.GetKeyDown(KeyCode.Space))
+        {
+            LoadStartScene();
+        }
+    }
+
+    private void LoadVideoScene()
+    {
+        try
+        {
+            Debug.Log("Попытка загрузить сцену с видео...");
+            SceneManager.LoadScene(VideoSceneName);
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogError($"Ошибка при загрузке сцены '{VideoSceneName}': {ex.Message}");
+        }
+    }
+
+    private void LoadStartScene()
+    {
+        try
+        {
+            Debug.Log("Возврат на стартовую сцену...");
+            SceneManager.LoadScene(StartSceneName);
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogError($"Ошибка при загрузке стартовой сцены '{StartSceneName}': {ex.Message}");
+        }
     }
 
     public void Pause()
@@ -123,8 +195,13 @@ public class GameManager : MonoBehaviour
     {
         playButton.SetActive(false);
         gameOver.SetActive(false);
+        continueText.SetActive(false);
         logo.SetActive(false);
         company.SetActive(false);
+        StartMusic.SetActive(false);
+        PlayMusic.SetActive(true);
+
+        SetAnimatorsUpdateMode(AnimatorUpdateMode.Normal);
 
         Time.timeScale = 1f;
         player.enabled = true;
@@ -135,12 +212,24 @@ public class GameManager : MonoBehaviour
         lives--;
         UpdateLivesText();
 
-        if (lives <= 0)
+        if (lives > 0)
+        {
+            ShowLifeLostText();
+            isPausedAfterCollision = true;
+            player.ResetPosition();
+            Pause();
+        }
+        else
         {
             gameOver.SetActive(true);
-            playButton.SetActive(true);
+            continueText.SetActive(true);
+            GameOverMusic.SetActive(true);
+            PlayMusic.SetActive(false);
+
             Pause();
             isGameOver = true;
+
+            SetAnimatorsUpdateMode(AnimatorUpdateMode.UnscaledTime);
 
             if (dieSound != null && audioSource != null)
             {
@@ -152,13 +241,83 @@ public class GameManager : MonoBehaviour
                 portNo.Close();
                 Debug.Log("Serial Port закрыт.");
             }
+
+            UpdateHighScore();
+            DisplayGameOverScore();
+
+            deathTimerCoroutine = StartCoroutine(StartDeathTimer(deathTimerSeconds));
         }
-        else
+    }
+
+    private void SetAnimatorsUpdateMode(AnimatorUpdateMode mode)
+    {
+        Animator[] animators = FindObjectsOfType<Animator>();
+        foreach (Animator animator in animators)
         {
-            isPausedAfterCollision = true;
-            player.ResetPosition();
-            Pause();
+            animator.updateMode = mode;
         }
+    }
+
+    private IEnumerator StartDeathTimer(int seconds)
+    {
+        timerText.gameObject.SetActive(true);
+        float timeRemaining = seconds;
+
+        while (timeRemaining > 0)
+        {
+            timerText.text = Mathf.CeilToInt(timeRemaining).ToString();
+            yield return new WaitForSecondsRealtime(1f);
+            timeRemaining -= 1f;
+
+            if (lives > 0)
+            {
+                PrepareForResume();
+                yield break;
+            }
+        }
+
+        RestartScene();
+    }
+
+    private void PrepareForResume()
+    {
+        isGameOver = false;
+        timerText.gameObject.SetActive(false);
+        awaitingSpaceToResume = true;
+        if (deathTimerCoroutine != null)
+        {
+            StopCoroutine(deathTimerCoroutine);
+            deathTimerCoroutine = null;
+        }
+
+        gameOver.SetActive(false);
+        playButton.SetActive(false);
+        continueText.SetActive(false);
+        logo.SetActive(false);
+        company.SetActive(false);
+        gameOverScoreText.gameObject.SetActive(false);
+        GameOverMusic.SetActive(false);
+        PlayMusic.SetActive(true);
+
+        player.ResetPosition();
+        Pause();
+    }
+
+    private void UpdateHighScore()
+    {
+        int highScore = PlayerPrefs.GetInt(HighScoreKey, 0);
+        if (score > highScore)
+        {
+            PlayerPrefs.SetInt(HighScoreKey, score);
+            PlayerPrefs.Save();
+        }
+    }
+
+    private void DisplayGameOverScore()
+    {
+        int highScore = PlayerPrefs.GetInt(HighScoreKey, 0);
+        gameOverScoreText.text = $"Рекорд: {highScore}\n\nВаш результат: {score}";
+        gameOverScoreText.gameObject.SetActive(true);
     }
 
     public void IncreaseScore()
@@ -172,6 +331,11 @@ public class GameManager : MonoBehaviour
         lives += livesPerToken;
         UpdateLivesText();
         Debug.Log("Добавлено жизней: " + livesPerToken + ". Текущее количество жизней: " + lives);
+
+        if (isGameOver && deathTimerCoroutine != null)
+        {
+            PrepareForResume();
+        }
     }
 
     private void UpdateLivesText()
@@ -204,12 +368,41 @@ public class GameManager : MonoBehaviour
 
     private IEnumerator GrantInvincibility(float duration)
     {
-        isInvincible = true; // Активируем бессмертие
-        player.SetInvincibility(true); // Включаем бессмертие для игрока, передавая параметр
+        isInvincible = true;
+        player.SetInvincibility(true);
 
         yield return new WaitForSeconds(duration);
 
-        isInvincible = false; // Деактивируем бессмертие
-        player.SetInvincibility(false); // Выключаем бессмертие для игрока
+        isInvincible = false;
+        player.SetInvincibility(false);
+    }
+
+    private void ShowLifeLostText()
+    {
+        GameObject lifeLostText = Instantiate(lifeLostTextPrefab, GameObject.Find("Canvas").transform, false);
+        StartCoroutine(AnimateLifeLostText(lifeLostText.GetComponent<Text>()));
+    }
+
+    private IEnumerator AnimateLifeLostText(Text text)
+    {
+        Vector3 startPos = text.transform.position;
+        Vector3 endPos = startPos + new Vector3(0, 50, 0);
+        Color originalColor = text.color;
+
+        float duration = 1f;
+        float elapsed = 0f;
+
+        while (elapsed < duration)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            float t = elapsed / duration;
+
+            text.transform.position = Vector3.Lerp(startPos, endPos, t);
+            text.color = new Color(originalColor.r, originalColor.g, originalColor.b, 1 - t);
+
+            yield return null;
+        }
+
+        Destroy(text.gameObject);
     }
 }
