@@ -13,6 +13,7 @@ public class GameManager : MonoBehaviour
     [SerializeField] private Spawner spawner;
     [SerializeField] private Text scoreText;
     [SerializeField] private Text livesText;
+    [SerializeField] private Text highScoreText; // Новое текстовое поле для отображения рекорда
     [SerializeField] private GameObject playButton;
     [SerializeField] private GameObject gameOver;
     [SerializeField] private Text gameOverScoreText;
@@ -34,11 +35,12 @@ public class GameManager : MonoBehaviour
     private bool isInvincible = false;
     private AudioSource audioSource;
     private Coroutine deathTimerCoroutine;
+    private Coroutine videoCountdownCoroutine;
     private bool awaitingSpaceToResume = false;
 
     private const string HighScoreKey = "HighScore";
-    private const string VideoSceneName = "Visualization"; // Название сцены с видео
-    private const string StartSceneName = "Flappy Bird"; // Название стартовой сцены
+    private const string VideoSceneName = "Visualization";
+    private const string StartSceneName = "Flappy Bird";
 
     [Header("Token Settings")]
     public int livesPerToken = 1;
@@ -58,6 +60,38 @@ public class GameManager : MonoBehaviour
         Instance = this;
     }
 
+    private void OnEnable()
+    {
+        if (portNo == null)
+        {
+            portNo = new SerialPort(comPort, 19200);
+        }
+
+        try
+        {
+            if (!portNo.IsOpen)
+            {
+                portNo.Open();
+                portNo.ReadTimeout = 1000;
+                portIsOpen = true;
+                Debug.Log("Serial Port открыт.");
+            }
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogError("Ошибка при открытии порта: " + ex.Message);
+        }
+    }
+
+    private void OnDisable()
+    {
+        if (portNo != null && portNo.IsOpen)
+        {
+            portNo.Close();
+            Debug.Log("Serial Port закрыт при смене сцены.");
+        }
+    }
+
     public void Start()
     {
         Pause();
@@ -66,31 +100,26 @@ public class GameManager : MonoBehaviour
         audioSource = GetComponent<AudioSource>() ?? gameObject.AddComponent<AudioSource>();
 
         StartMusic.SetActive(true);
+        highScoreText.gameObject.SetActive(true);
 
         SetAnimatorsUpdateMode(AnimatorUpdateMode.UnscaledTime);
 
-        portNo = new SerialPort(comPort, 19200);
-        try
-        {
-            portNo.Open();
-            portNo.ReadTimeout = 1000;
-            portIsOpen = true;
-            Debug.Log("Serial Port открыт.");
-        }
-        catch (System.Exception ex)
-        {
-            Debug.LogError("Ошибка при открытии порта: " + ex.Message);
-        }
-
-        // Проверка существования сцены перед её запуском
         if (Application.CanStreamedLevelBeLoaded(VideoSceneName))
         {
             Debug.Log($"Сцена '{VideoSceneName}' найдена. Запуск через 15 секунд...");
-            StartCoroutine(StartCountdownToVideoScene(15));
+            videoCountdownCoroutine = StartCoroutine(StartCountdownToVideoScene(30));
         }
         else
         {
             Debug.LogError($"Сцена '{VideoSceneName}' не найдена! Проверьте имя сцены.");
+        }
+
+        DisplayHighScore();
+
+        if (PlayerPrefs.HasKey("ExtraLife"))
+        {
+            AddLife();
+            PlayerPrefs.DeleteKey("ExtraLife");
         }
     }
 
@@ -98,8 +127,14 @@ public class GameManager : MonoBehaviour
     {
         while (countdownTime > 0)
         {
+            if (lives > 0)
+            {
+                Debug.Log("Жизни больше 0, отмена запуска видео-сцены.");
+                yield break;
+            }
+
             Debug.Log($"До запуска сцены с видео осталось: {countdownTime} секунд...");
-            yield return new WaitForSeconds(1f);
+            yield return new WaitForSecondsRealtime(1f);
             countdownTime--;
         }
 
@@ -143,6 +178,13 @@ public class GameManager : MonoBehaviour
                     if (portValue == 1)
                     {
                         AddLife();
+
+                        if (videoCountdownCoroutine != null)
+                        {
+                            StopCoroutine(videoCountdownCoroutine);
+                            videoCountdownCoroutine = null;
+                            Debug.Log("Корутина запуска видео-сцены остановлена, так как у игрока есть жизни.");
+                        }
                     }
                 }
             }
@@ -150,12 +192,6 @@ public class GameManager : MonoBehaviour
             {
                 Debug.LogError("Ошибка при чтении порта: " + ex.Message);
             }
-        }
-
-        // Проверка на возврат на стартовую сцену из видео-сцены
-        if (SceneManager.GetActiveScene().name == VideoSceneName && Input.GetKeyDown(KeyCode.Space))
-        {
-            LoadStartScene();
         }
     }
 
@@ -169,19 +205,6 @@ public class GameManager : MonoBehaviour
         catch (System.Exception ex)
         {
             Debug.LogError($"Ошибка при загрузке сцены '{VideoSceneName}': {ex.Message}");
-        }
-    }
-
-    private void LoadStartScene()
-    {
-        try
-        {
-            Debug.Log("Возврат на стартовую сцену...");
-            SceneManager.LoadScene(StartSceneName);
-        }
-        catch (System.Exception ex)
-        {
-            Debug.LogError($"Ошибка при загрузке стартовой сцены '{StartSceneName}': {ex.Message}");
         }
     }
 
@@ -200,11 +223,18 @@ public class GameManager : MonoBehaviour
         company.SetActive(false);
         StartMusic.SetActive(false);
         PlayMusic.SetActive(true);
+        highScoreText.gameObject.SetActive(true);
 
         SetAnimatorsUpdateMode(AnimatorUpdateMode.Normal);
 
         Time.timeScale = 1f;
         player.enabled = true;
+
+        if (videoCountdownCoroutine != null)
+        {
+            StopCoroutine(videoCountdownCoroutine);
+            videoCountdownCoroutine = null;
+        }
     }
 
     public void GameOver()
@@ -225,6 +255,7 @@ public class GameManager : MonoBehaviour
             continueText.SetActive(true);
             GameOverMusic.SetActive(true);
             PlayMusic.SetActive(false);
+            highScoreText.gameObject.SetActive(false);
 
             Pause();
             isGameOver = true;
@@ -246,6 +277,12 @@ public class GameManager : MonoBehaviour
             DisplayGameOverScore();
 
             deathTimerCoroutine = StartCoroutine(StartDeathTimer(deathTimerSeconds));
+
+            if (videoCountdownCoroutine != null)
+            {
+                StopCoroutine(videoCountdownCoroutine);
+                videoCountdownCoroutine = null;
+            }
         }
     }
 
@@ -313,6 +350,12 @@ public class GameManager : MonoBehaviour
         }
     }
 
+    private void DisplayHighScore()
+    {
+        int highScore = PlayerPrefs.GetInt(HighScoreKey, 0);
+        highScoreText.text = $"Рекорд: {highScore}";
+    }
+
     private void DisplayGameOverScore()
     {
         int highScore = PlayerPrefs.GetInt(HighScoreKey, 0);
@@ -335,6 +378,13 @@ public class GameManager : MonoBehaviour
         if (isGameOver && deathTimerCoroutine != null)
         {
             PrepareForResume();
+        }
+
+        if (videoCountdownCoroutine != null)
+        {
+            StopCoroutine(videoCountdownCoroutine);
+            videoCountdownCoroutine = null;
+            Debug.Log("Корутина запуска видео-сцены остановлена, так как у игрока есть жизни.");
         }
     }
 

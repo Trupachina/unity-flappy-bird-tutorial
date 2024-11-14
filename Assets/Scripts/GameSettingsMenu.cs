@@ -97,16 +97,10 @@ public class GameSettingsMenu : MonoBehaviour
 
     void ApplySoundSettings()
     {
-        float volume = 0f;
-        switch (soundLevel)
+        if (SoundManager.Instance != null)
         {
-            case 0: volume = 0f; break;
-            case 1: volume = 0.25f; break;
-            case 2: volume = 0.5f; break;
-            case 3: volume = 1f; break;
+            SoundManager.Instance.SetVolumeLevel(soundLevel);
         }
-
-        AudioListener.volume = volume;
     }
 
     void ChangeLivesPerToken()
