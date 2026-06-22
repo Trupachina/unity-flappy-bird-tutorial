@@ -11,7 +11,7 @@ public class VideoSceneManager : MonoBehaviour
 
     private void OnEnable()
     {
-        portNo = new SerialPort(comPort, 19200);
+        portNo = new SerialPort(comPort, 9600);
         try
         {
             portNo.Open();

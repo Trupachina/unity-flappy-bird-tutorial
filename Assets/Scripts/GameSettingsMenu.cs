@@ -1,5 +1,7 @@
 using UnityEngine;
 using UnityEngine.UI;
+using System.Diagnostics;
+using System;
 
 public class GameSettingsMenu : MonoBehaviour
 {
@@ -8,7 +10,12 @@ public class GameSettingsMenu : MonoBehaviour
     public Text muteButtonText;
     public Button livesPerTokenButton;
     public Text livesPerTokenButtonText;
+    public Button resetHighScoreButton;
+    public Text resetHighScoreButtonText;
+    public Button restartPCButton;
+    public Text restartPCButtonText;
     public Button exitButton;
+    public Text exitButtonText;
 
     private int soundLevel = 3;
     private int menuSelection = 0;
@@ -33,10 +40,15 @@ public class GameSettingsMenu : MonoBehaviour
 
         muteButton.onClick.AddListener(ChangeSoundLevel);
         livesPerTokenButton.onClick.AddListener(ChangeLivesPerToken);
+        resetHighScoreButton.onClick.AddListener(ResetHighScore);
+        restartPCButton.onClick.AddListener(RestartPC);
         exitButton.onClick.AddListener(ExitMenu);
 
         UpdateMuteButtonText();
         UpdateLivesPerTokenButtonText();
+        resetHighScoreButtonText.text = "Сбросить рекорд";
+        restartPCButtonText.text = "Перезагрузить ПК";
+        exitButtonText.text = "Выход";
     }
 
     void Update()
@@ -53,7 +65,7 @@ public class GameSettingsMenu : MonoBehaviour
 
         if (isMenuOpen && Input.GetKeyDown("p"))
         {
-            menuSelection = (menuSelection + 1) % 3;
+            menuSelection = (menuSelection + 1) % 5;
             HighlightSelection();
         }
     }
@@ -64,6 +76,7 @@ public class GameSettingsMenu : MonoBehaviour
         settingsMenu.SetActive(isMenuOpen);
         if (isMenuOpen)
         {
+            menuSelection = 0;
             HighlightSelection();
         }
     }
@@ -79,6 +92,12 @@ public class GameSettingsMenu : MonoBehaviour
                 ChangeLivesPerToken();
                 break;
             case 2:
+                ResetHighScore();
+                break;
+            case 3:
+                RestartPC();
+                break;
+            case 4:
                 ExitMenu();
                 break;
         }
@@ -132,21 +151,77 @@ public class GameSettingsMenu : MonoBehaviour
 
     void HighlightSelection()
     {
-        muteButton.GetComponent<Image>().color = Color.white;
-        livesPerTokenButton.GetComponent<Image>().color = Color.white;
-        exitButton.GetComponent<Image>().color = Color.white;
+        Button[] buttons = {
+            muteButton,
+            livesPerTokenButton,
+            resetHighScoreButton,
+            restartPCButton,
+            exitButton
+        };
 
-        switch (menuSelection)
+        foreach (var btn in buttons)
         {
-            case 0:
-                muteButton.GetComponent<Image>().color = Color.yellow;
-                break;
-            case 1:
-                livesPerTokenButton.GetComponent<Image>().color = Color.yellow;
-                break;
-            case 2:
-                exitButton.GetComponent<Image>().color = Color.yellow;
-                break;
+            if (btn != null) btn.GetComponent<Image>().color = Color.white;
+        }
+
+        if (menuSelection >= 0 && menuSelection < buttons.Length && buttons[menuSelection] != null)
+        {
+            buttons[menuSelection].GetComponent<Image>().color = Color.yellow;
+        }
+    }
+
+    void ResetHighScore()
+    {
+        PlayerPrefs.DeleteKey("HighScore");
+        PlayerPrefs.Save();
+
+        if (gameManager != null)
+        {
+            // Вызываем метод сброса в GameManager
+            gameManager.ResetHighScore();
+        }
+
+        resetHighScoreButtonText.text = "Рекорд сброшен!";
+        StartCoroutine(ResetButtonTextAfterDelay(1.5f, resetHighScoreButtonText, "Сбросить рекорд"));
+    }
+
+    void RestartPC()
+    {
+        restartPCButtonText.text = "Подтвердите еще раз";
+        restartPCButton.onClick.RemoveAllListeners();
+        restartPCButton.onClick.AddListener(ConfirmRestartPC);
+    }
+
+    void ConfirmRestartPC()
+    {
+        restartPCButtonText.text = "Перезагрузка...";
+        restartPCButton.interactable = false;
+
+        try
+        {
+            Process.Start("shutdown", "/r /t 0");
+        }
+        catch (Exception e)
+        {
+            restartPCButtonText.text = "Ошибка: " + e.Message;
+            StartCoroutine(ResetButtonTextAfterDelay(2f, restartPCButtonText, "Перезагрузить ПК"));
+            restartPCButton.interactable = true;
+            restartPCButton.onClick.RemoveAllListeners();
+            restartPCButton.onClick.AddListener(RestartPC);
+        }
+    }
+
+    System.Collections.IEnumerator ResetButtonTextAfterDelay(float delay, Text targetText, string originalText)
+    {
+        yield return new WaitForSecondsRealtime(delay);
+        if (targetText != null)
+            targetText.text = originalText;
+
+        if (targetText == restartPCButtonText)
+        {
+            restartPCButton.interactable = true;
+            restartPCButton.onClick.RemoveAllListeners();
+            restartPCButton.onClick.AddListener(RestartPC);
         }
     }
 }

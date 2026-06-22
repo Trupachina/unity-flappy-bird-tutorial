@@ -5,7 +5,7 @@ public class SoundManager : MonoBehaviour
 {
     public static SoundManager Instance { get; private set; }
 
-    private VideoPlayer videoPlayer;
+    public VideoPlayer videoPlayer;
 
     private void Awake()
     {
@@ -48,5 +48,18 @@ public class SoundManager : MonoBehaviour
         videoPlayer = vp;
         int savedSoundLevel = PlayerPrefs.GetInt("soundLevel", 3);
         SetVolumeLevel(savedSoundLevel);
+    }
+
+    public float GetCurrentVolume()
+    {
+        int soundLevel = PlayerPrefs.GetInt("soundLevel", 3);
+        return soundLevel switch
+        {
+            0 => 0f,
+            1 => 0.25f,
+            2 => 0.5f,
+            3 => 1f,
+            _ => 1f
+        };
     }
 }

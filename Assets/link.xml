@@ -1,0 +1,3 @@
+<linker>
+  <assembly fullname="System.IO.Ports" preserve="all"/>
+</linker>

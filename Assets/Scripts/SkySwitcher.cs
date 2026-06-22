@@ -1,60 +1,55 @@
 using UnityEngine;
+using System.Collections;
 
 public class SkySwitcher : MonoBehaviour
 {
     public Material daySkyMaterial;
     public Material nightSkyMaterial;
-    public float animationSpeed = 1f;
-    public float transitionDuration = 5f; // Длительность перехода между материалами
-    public float switchInterval = 60f; // Интервал смены в секундах (1 минута)
+    public float transitionDuration = 5f;
+    public float switchInterval = 60f;
 
     private MeshRenderer meshRenderer;
-    private bool isDay = true; // Флаг текущего времени суток
+    public bool IsDay { get; private set; } = true;
     private float transitionTimer = 0f;
+
+    // Событие для оповещения о смене времени суток
+    public event System.Action<bool> OnDayNightChanged;
 
     private void Awake()
     {
         meshRenderer = GetComponent<MeshRenderer>();
-        meshRenderer.material = daySkyMaterial; // Устанавливаем дневной материал изначально
+        meshRenderer.material = new Material(daySkyMaterial); // Используем копию материала
     }
 
     private void Update()
     {
-        // Параллакс-анимация
-        meshRenderer.material.mainTextureOffset += new Vector2(animationSpeed * Time.deltaTime, 0);
-
-        // Обновляем таймер
         transitionTimer += Time.deltaTime;
-
-        // Проверяем, если прошло необходимое время для смены
         if (transitionTimer >= switchInterval)
         {
-            transitionTimer = 0f; // Сбрасываем таймер
-            StartCoroutine(SwitchSky()); // Запускаем плавную смену
+            transitionTimer = 0f;
+            StartCoroutine(SwitchSky());
         }
     }
 
-    private System.Collections.IEnumerator SwitchSky()
+    private IEnumerator SwitchSky()
     {
-        Material startMaterial = isDay ? daySkyMaterial : nightSkyMaterial;
-        Material endMaterial = isDay ? nightSkyMaterial : daySkyMaterial;
+        Material startMaterial = IsDay ? daySkyMaterial : nightSkyMaterial;
+        Material endMaterial = IsDay ? nightSkyMaterial : daySkyMaterial;
 
         float elapsedTime = 0f;
-        isDay = !isDay; // Переключаем флаг
+        IsDay = !IsDay; // Переключаем флаг
 
-        // Плавно изменяем материал с использованием линейной интерполяции (Lerp)
+        // Уведомляем подписчиков
+        OnDayNightChanged?.Invoke(IsDay);
+
         while (elapsedTime < transitionDuration)
         {
             elapsedTime += Time.deltaTime;
-            float blendFactor = Mathf.Clamp01(elapsedTime / transitionDuration); // Нормализованный таймер (от 0 до 1)
-
-            // Линейно интерполируем между двумя текстурами
+            float blendFactor = Mathf.Clamp01(elapsedTime / transitionDuration);
             meshRenderer.material.Lerp(startMaterial, endMaterial, blendFactor);
-
             yield return null;
         }
 
-        // Устанавливаем конечный материал
-        meshRenderer.material = endMaterial;
+        meshRenderer.material = new Material(endMaterial);
     }
 }
