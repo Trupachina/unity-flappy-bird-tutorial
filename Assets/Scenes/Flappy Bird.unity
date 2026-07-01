@@ -1285,6 +1285,7 @@ GameObject:
   - component: {fileID: 527830926}
   - component: {fileID: 527830927}
   - component: {fileID: 527830928}
+  - component: {fileID: 527830929}
   m_Layer: 0
   m_Name: Player
   m_TagString: Player
@@ -1443,6 +1444,56 @@ MonoBehaviour:
   jumpSound: {fileID: 8300000, guid: 31fa7f8b587e49347b3b50230e93a326, type: 3}
   hitSound: {fileID: 8300000, guid: 8f5128757ae221944a9dff3c0f9b69f2, type: 3}
   scoreSound: {fileID: 8300000, guid: 8d466d28aea332848821f563773ff34d, type: 3}
+  currentMoveMode: 0
+  logModeChanges: 1
+  flightLiftAcceleration: 18
+  flightGravity: -11
+  flightMaxUpVelocity: 6
+  flightMaxDownVelocity: -6.5
+  arrowVerticalSpeed: 4.5
+  arrowTiltAngle: 35
+  arrowTrail: {fileID: 0}
+  flappySprites: []
+  flightSprites:
+  - {fileID: 21300000, guid: fecf4a8980ccb944db2d8fcb44f1ec69, type: 3}
+  arrowSprites: []
+  flappyAnimationInterval: 0.15
+  flightAnimationInterval: 0.15
+  arrowAnimationInterval: 0.15
+  flightTrail: {fileID: 0}
+  useFlightTrail: 0
+--- !u!114 &527830929
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 527830923}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8ee60a1741bdc5e4f8466341b38ca49c, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  emitOnlyInFlightMode: 1
+  disableExistingTrailRenderers: 1
+  clearWhenDisabled: 1
+  exhaustLocalOffset: {x: -0.58, y: -0.12, z: 0}
+  directionMode: 0
+  exhaustSpeed: 5.2
+  speedRandomness: 0.55
+  verticalSpread: 0.35
+  particleLifetime: 0.5
+  particlesPerSecond: 80
+  startSize: 0.3
+  endSizeMultiplier: 0.1
+  sizeRandomness: 0.04
+  startColor: {r: 1, g: 1, b: 1, a: 0.95}
+  middleColor: {r: 0.7056604, g: 0.38744745, b: 0.38744745, a: 0.65}
+  endColor: {r: 0.3056603, g: 0.0986187, b: 0.0986187, a: 0.9764706}
+  usePlayerSortingLayer: 1
+  sortingOrderOffset: -1
+  fallbackSortingOrder: 20
+  logDebug: 0
 --- !u!1 &544993727
 GameObject:
   m_ObjectHideFlags: 0
@@ -4302,6 +4353,14 @@ MonoBehaviour:
     type: 3}
   nightPipesPrefab: {fileID: -5845766125972383839, guid: 7ea28d0cf42ae704ba8cc17cb421f854,
     type: 3}
+  portalInPrefab: {fileID: 7211106649827822551, guid: 916ea95cf7914ae4599de79526f50fe9,
+    type: 3}
+  portalOutPrefab: {fileID: 7211106649827822551, guid: 6cc184b18fe6e034682e4894d4f78ed1,
+    type: 3}
+  portalSpawnY: 0
+  portalSpeedMultiplier: 1
+  portalActivationTimeout: 8
+  forceFlappyOnExitPortalTimeout: 1
   spawnRate: 0.8
   minHeight: -1
   maxHeight: 1.5
@@ -4311,17 +4370,36 @@ MonoBehaviour:
   skySwitcher: {fileID: 0}
   useScoreBasedDifficulty: 1
   pointsPerDifficultyStage: 20
-  minimumVerticalGap: 1.8
-  minimumDynamicGap: 1.65
-  minimumSpawnDelay: 0.55
+  minimumVerticalGap: 2.2
+  minimumDynamicGap: 2.15
+  minimumSpawnDelay: 0.75
   logDifficultyStageChanges: 1
+  enablePortalFlightSegments: 1
+  logPortalSegments: 1
+  minScoreBeforePortalSegments: 40
+  minDifficultyStageForPortalSegments: 2
+  portalSegmentChancePerCheck: 0.18
+  minSecondsBetweenPortalSegments: 24
+  minPipesBetweenPortalSegments: 8
+  prePortalEmptySeconds: 1
+  flightSegmentDurationSeconds: 20
+  preExitPortalEmptySeconds: 1
+  postExitPortalEmptySeconds: 0.3
+  flightModeGapBonus: 0.12
+  allowMovingPipesInFlightMode: 1
+  useFairSpawnDirector: 1
+  movingPipeHeightPadding: 0.55
+  movingPipeGapBonus: 0.18
+  safeWorldMinCenterY: -1.65
+  safeWorldMaxCenterY: 2.65
+  minimumPipesBetweenStaircases: 6
   enableStaircasePatterns: 1
-  minStaircaseLength: 3
-  maxStaircaseLength: 6
-  staircaseStepHeight: 0.65
-  staircaseSpawnDelayMultiplier: 0.62
-  minimumStaircaseSpawnDelay: 0.35
-  staircaseRecoveryDelayMultiplier: 0.75
+  minStaircaseLength: 5
+  maxStaircaseLength: 5
+  staircaseStepHeight: 0.6
+  staircaseSpawnDelayMultiplier: 0.7
+  minimumStaircaseSpawnDelay: 0.55
+  staircaseRecoveryDelayMultiplier: 1
 --- !u!1001 &6157948951859473950
 PrefabInstance:
   m_ObjectHideFlags: 0

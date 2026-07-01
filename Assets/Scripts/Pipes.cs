@@ -9,15 +9,10 @@ using UnityEngine;
 /// - плавное движение центра прохода вверх/вниз;
 /// - резкое смещение прохода на поздних этапах;
 /// - динамическое сужение/расширение gap.
-/// 
-/// Скрипт сохраняет старую структуру:
-/// public Transform top;
-/// public Transform bottom;
-/// public float speed;
-/// public float gap;
-/// public Sprite daySprite;
-/// public Sprite nightSprite;
-/// public void SetSprite(bool isDay).
+///
+/// В этой версии добавлена защита от нечестного движения прохода:
+/// итоговый центр прохода clamp-ится в безопасной мировой зоне,
+/// которую передаёт Spawner.
 /// </summary>
 public class Pipes : MonoBehaviour
 {
@@ -106,6 +101,9 @@ public class Pipes : MonoBehaviour
     private float suddenShiftOffset;
     private Coroutine suddenShiftCoroutine;
 
+    private float safeWorldMinCenterY = -10000f;
+    private float safeWorldMaxCenterY = 10000f;
+
     private void Awake()
     {
         CacheInitialPositions();
@@ -171,6 +169,10 @@ public class Pipes : MonoBehaviour
     /// <summary>
     /// Настройка прогрессивной сложности для конкретной пары труб.
     /// Spawner рассчитывает параметры этапа сложности и передаёт их сюда.
+    ///
+    /// newSafeWorldMinCenterY/newSafeWorldMaxCenterY защищают движущийся проход:
+    /// даже если синусоида или пульсация пытаются увести центр слишком высоко/низко,
+    /// итоговое положение прохода останется внутри безопасной игровой зоны.
     /// </summary>
     public void ConfigureDifficulty(
         float pipeSpeed,
@@ -191,7 +193,9 @@ public class Pipes : MonoBehaviour
         float suddenMaxDelay,
         int maxSuddenShifts,
         float suddenLerpDuration,
-        float allowSuddenShiftUntilX)
+        float allowSuddenShiftUntilX,
+        float newSafeWorldMinCenterY = -10000f,
+        float newSafeWorldMaxCenterY = 10000f)
     {
         speed = Mathf.Max(0.1f, pipeSpeed);
 
@@ -217,6 +221,9 @@ public class Pipes : MonoBehaviour
         suddenShiftDuration = Mathf.Max(0.01f, suddenLerpDuration);
         suddenShiftAllowedUntilX = allowSuddenShiftUntilX;
         suddenShiftOffset = 0f;
+
+        safeWorldMinCenterY = Mathf.Min(newSafeWorldMinCenterY, newSafeWorldMaxCenterY);
+        safeWorldMaxCenterY = Mathf.Max(newSafeWorldMinCenterY, newSafeWorldMaxCenterY);
 
         ResetSuddenShiftTimer();
         ApplyPipeLayout(0f, baseGap);
@@ -306,6 +313,12 @@ public class Pipes : MonoBehaviour
             totalOffset = Mathf.Clamp(totalOffset, -maxCenterOffset, maxCenterOffset);
         }
 
+        // Главное исправление для движущихся труб:
+        // итоговый центр прохода не должен уходить слишком высоко или слишком низко.
+        float minLocalOffset = safeWorldMinCenterY - transform.position.y;
+        float maxLocalOffset = safeWorldMaxCenterY - transform.position.y;
+        totalOffset = Mathf.Clamp(totalOffset, minLocalOffset, maxLocalOffset);
+
         return totalOffset;
     }
 
@@ -333,7 +346,7 @@ public class Pipes : MonoBehaviour
 
     /// <summary>
     /// Применяет итоговое положение верхней и нижней трубы.
-    /// 
+    ///
     /// centerOffset двигает весь проход вверх/вниз.
     /// currentGap разводит или сближает верхнюю и нижнюю трубу.
     /// </summary>
@@ -355,6 +368,7 @@ public class Pipes : MonoBehaviour
     /// <summary>
     /// Управляет таймером резкого смещения прохода.
     /// Смещение разрешено только пока труба ещё достаточно далеко от игрока.
+    /// В текущем балансе Spawner выключает suddenShift для движущихся труб.
     /// </summary>
     private void UpdateSuddenShiftTimer()
     {

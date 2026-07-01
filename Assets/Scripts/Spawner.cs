@@ -3,25 +3,52 @@ using UnityEngine;
 
 /// <summary>
 /// Создаёт трубы и управляет прогрессивным усложнением игры.
-/// 
-/// Сложность повышается по score.
-/// В твоём проекте score увеличивается при пролёте зоны Scoring,
-/// поэтому score фактически равен количеству успешных пролётов труб.
-/// 
-/// GameManager менять не нужно:
-/// Spawner читает GameManager.Instance.score напрямую.
+///
+/// Сохранено:
+/// - базовый Flappy-спавн;
+/// - этапы сложности каждые 20 очков;
+/// - движущиеся трубы;
+/// - Fair Spawn Director;
+/// - ступенчатые серии поздней игры.
+///
+/// Новая логика режимов:
+/// - дополнительные режимы больше НЕ включаются таймером посреди маршрута;
+/// - Flight включается только через portal_in;
+/// - возврат в Flappy происходит только через portal_out;
+/// - перед portal_in создаётся пустой участок без труб;
+/// - перед portal_out тоже создаётся пустой участок без труб;
+/// - Arrow пока не используется.
 /// </summary>
 public class Spawner : MonoBehaviour
 {
     [Header("Префабы труб")]
-    [Tooltip("Префаб дневных труб из рабочей версии.")]
+    [Tooltip("Обычный дневной префаб труб.")]
     public Pipes dayPipesPrefab;
 
-    [Tooltip("Префаб ночных труб из рабочей версии.")]
+    [Tooltip("Обычный ночной префаб труб.")]
     public Pipes nightPipesPrefab;
 
+    [Header("Префабы порталов")]
+    [Tooltip("Портал входа в Flight-режим. В проекте это portal_in.")]
+    [SerializeField] private GameObject portalInPrefab;
+
+    [Tooltip("Портал выхода обратно в Flappy-режим. В проекте это portal_out.")]
+    [SerializeField] private GameObject portalOutPrefab;
+
+    [Tooltip("Y-позиция появления порталов.")]
+    [SerializeField] private float portalSpawnY = 0f;
+
+    [Tooltip("Множитель скорости порталов относительно обычной скорости труб.")]
+    [SerializeField] private float portalSpeedMultiplier = 1f;
+
+    [Tooltip("Сколько секунд ждать срабатывания портала, прежде чем включить аварийный сценарий.")]
+    [SerializeField] private float portalActivationTimeout = 8f;
+
+    [Tooltip("Если портал выхода не сработал за timeout, принудительно вернуть игрока в Flappy, чтобы игра не зависла.")]
+    [SerializeField] private bool forceFlappyOnExitPortalTimeout = true;
+
     [Header("Базовый спавн")]
-    [Tooltip("Базовая пауза между появлением труб. На первых 20 пролётах используется почти как есть.")]
+    [Tooltip("Базовая пауза между появлением труб.")]
     public float spawnRate = 1f;
 
     [Tooltip("Минимальное базовое смещение трубы по высоте.")]
@@ -47,42 +74,103 @@ public class Spawner : MonoBehaviour
     [Tooltip("Включает усложнение по количеству успешных пролётов труб.")]
     public bool useScoreBasedDifficulty = true;
 
-    [Tooltip("Через сколько очков повышается этап сложности. Рекомендуемое значение — 20.")]
+    [Tooltip("Через сколько очков повышается этап сложности.")]
     public int pointsPerDifficultyStage = 20;
 
     [Tooltip("Минимально допустимый статический gap, ниже которого обычные трубы не сужаются.")]
-    public float minimumVerticalGap = 1.8f;
+    public float minimumVerticalGap = 2.35f;
 
     [Tooltip("Минимальный gap во время динамического сужения/расширения.")]
-    public float minimumDynamicGap = 1.65f;
+    public float minimumDynamicGap = 2.25f;
 
     [Tooltip("Минимально допустимая пауза между обычными трубами.")]
-    public float minimumSpawnDelay = 0.55f;
+    public float minimumSpawnDelay = 0.80f;
 
-    [Tooltip("Показывать в консоли смену этапов сложности.")]
+    [Tooltip("Показывать в консоль смену этапов сложности.")]
     public bool logDifficultyStageChanges = true;
 
+    [Header("Портальные Flight-секции")]
+    [Tooltip("Главный переключатель портальных Flight-секций.")]
+    [SerializeField] private bool enablePortalFlightSegments = true;
+
+    [Tooltip("Писать в консоль подготовку, старт и завершение Flight-секций.")]
+    [SerializeField] private bool logPortalSegments = true;
+
+    [Tooltip("Минимальный score, после которого могут появляться Flight-секции.")]
+    [SerializeField] private int minScoreBeforePortalSegments = 40;
+
+    [Tooltip("Минимальный этап сложности, после которого могут появляться Flight-секции.")]
+    [SerializeField] private int minDifficultyStageForPortalSegments = 2;
+
+    [Tooltip("Вероятность запуска Flight-секции при очередной проверке.")]
+    [Range(0f, 1f)]
+    [SerializeField] private float portalSegmentChancePerCheck = 0.18f;
+
+    [Tooltip("Минимальная пауза в секундах между Flight-секциями.")]
+    [SerializeField] private float minSecondsBetweenPortalSegments = 24f;
+
+    [Tooltip("Минимальное количество обычных труб между Flight-секциями.")]
+    [SerializeField] private int minPipesBetweenPortalSegments = 8;
+
+    [Tooltip("Пустой участок перед portal_in. Нужен, чтобы старые трубы ушли с экрана.")]
+    [SerializeField] private float prePortalEmptySeconds = 3.0f;
+
+    [Tooltip("Длительность активной Flight-секции после прохода portal_in.")]
+    [SerializeField] private float flightSegmentDurationSeconds = 10f;
+
+    [Tooltip("Пустой участок перед portal_out после Flight-труб.")]
+    [SerializeField] private float preExitPortalEmptySeconds = 1.6f;
+
+    [Tooltip("Пустой участок после portal_out перед возвратом к обычным трубам.")]
+    [SerializeField] private float postExitPortalEmptySeconds = 0.8f;
+
+    [Header("Flight Mode")]
+    [Tooltip("Дополнительный gap для Flight-режима.")]
+    [SerializeField] private float flightModeGapBonus = 0.12f;
+
+    [Tooltip("В Flight-режиме разрешать движущиеся трубы по текущей сложности.")]
+    [SerializeField] private bool allowMovingPipesInFlightMode = true;
+
+    [Header("Fair Spawn Director")]
+    [Tooltip("Если включено, Spawner ограничивает резкие перепады высоты между соседними трубами.")]
+    public bool useFairSpawnDirector = true;
+
+    [Tooltip("Насколько движущиеся трубы должны быть дальше от крайних верхних/нижних позиций.")]
+    public float movingPipeHeightPadding = 0.35f;
+
+    [Tooltip("Дополнительный gap для движущихся труб. Движущийся проход сложнее читать, поэтому ему нужен небольшой запас.")]
+    public float movingPipeGapBonus = 0.12f;
+
+    [Tooltip("Минимальная безопасная высота центра прохода в мировых координатах.")]
+    public float safeWorldMinCenterY = -1.65f;
+
+    [Tooltip("Максимальная безопасная высота центра прохода в мировых координатах.")]
+    public float safeWorldMaxCenterY = 2.65f;
+
+    [Tooltip("Сколько обычных труб должно пройти между ступенчатыми сериями.")]
+    public int minimumPipesBetweenStaircases = 5;
+
     [Header("Ступенчатые серии поздней игры")]
-    [Tooltip("Разрешить короткие серии близких труб в форме ступенек на позднем этапе.")]
+    [Tooltip("Разрешить продолжительные серии близких труб в форме ступенек на позднем этапе.")]
     public bool enableStaircasePatterns = true;
 
     [Tooltip("Минимальное количество труб в ступенчатой серии.")]
-    public int minStaircaseLength = 3;
+    public int minStaircaseLength = 5;
 
     [Tooltip("Максимальное количество труб в ступенчатой серии.")]
-    public int maxStaircaseLength = 4;
+    public int maxStaircaseLength = 7;
 
     [Tooltip("Вертикальный шаг между соседними трубами в ступенчатой серии.")]
-    public float staircaseStepHeight = 0.65f;
+    public float staircaseStepHeight = 0.45f;
 
     [Tooltip("Во сколько раз промежуток внутри ступенчатой серии короче обычного spawnRate текущего этапа.")]
-    public float staircaseSpawnDelayMultiplier = 0.62f;
+    public float staircaseSpawnDelayMultiplier = 0.78f;
 
     [Tooltip("Минимальная пауза между трубами внутри ступенчатой серии.")]
-    public float minimumStaircaseSpawnDelay = 0.35f;
+    public float minimumStaircaseSpawnDelay = 0.58f;
 
-    [Tooltip("После ступенчатой серии добавляется небольшая пауза, чтобы серия не слипалась со следующей трубой.")]
-    public float staircaseRecoveryDelayMultiplier = 0.75f;
+    [Tooltip("После ступенчатой серии добавляется пауза, чтобы серия не слипалась со следующей трубой.")]
+    public float staircaseRecoveryDelayMultiplier = 1.10f;
 
     private bool isDay = true;
     private float switchTimer;
@@ -90,16 +178,36 @@ public class Spawner : MonoBehaviour
     private Coroutine spawnLoopCoroutine;
     private int lastLoggedDifficultyStage = -1;
 
+    private bool hasLastSpawnHeight;
+    private float lastSpawnHeight;
+    private int pipesSinceLastStaircase = 999;
+    private int pipesSinceLastPortalSegment = 999;
+
+    private Player player;
+    private bool portalSegmentRunning;
+    private float nextPortalSegmentAllowedTime;
+
+    private bool waitingForPortalActivation;
+    private bool expectedPortalActivated;
+    private Player.PlayerMoveMode expectedPortalMode;
+
     private void Awake()
     {
         if (skySwitcher == null)
         {
             skySwitcher = FindObjectOfType<SkySwitcher>();
         }
+
+        if (player == null)
+        {
+            player = FindObjectOfType<Player>();
+        }
     }
 
     private void OnEnable()
     {
+        ModeSwitchPortal.OnPortalActivated += HandlePortalActivated;
+
         if (spawnLoopCoroutine != null)
         {
             StopCoroutine(spawnLoopCoroutine);
@@ -110,10 +218,63 @@ public class Spawner : MonoBehaviour
 
     private void OnDisable()
     {
+        ModeSwitchPortal.OnPortalActivated -= HandlePortalActivated;
+
         if (spawnLoopCoroutine != null)
         {
             StopCoroutine(spawnLoopCoroutine);
             spawnLoopCoroutine = null;
+        }
+
+        SetPlayerMode(Player.PlayerMoveMode.Flappy);
+
+        portalSegmentRunning = false;
+        waitingForPortalActivation = false;
+        expectedPortalActivated = false;
+    }
+
+    private void OnValidate()
+    {
+        pointsPerDifficultyStage = Mathf.Max(20, pointsPerDifficultyStage);
+
+        minimumVerticalGap = Mathf.Max(2.2f, minimumVerticalGap);
+        minimumDynamicGap = Mathf.Max(2.1f, minimumDynamicGap);
+        minimumSpawnDelay = Mathf.Max(0.72f, minimumSpawnDelay);
+
+        portalSpeedMultiplier = Mathf.Clamp(portalSpeedMultiplier, 0.5f, 1.5f);
+        portalActivationTimeout = Mathf.Max(2f, portalActivationTimeout);
+
+        minScoreBeforePortalSegments = Mathf.Max(0, minScoreBeforePortalSegments);
+        minDifficultyStageForPortalSegments = Mathf.Max(0, minDifficultyStageForPortalSegments);
+        portalSegmentChancePerCheck = Mathf.Clamp01(portalSegmentChancePerCheck);
+        minSecondsBetweenPortalSegments = Mathf.Max(1f, minSecondsBetweenPortalSegments);
+        minPipesBetweenPortalSegments = Mathf.Max(0, minPipesBetweenPortalSegments);
+
+        prePortalEmptySeconds = Mathf.Max(0f, prePortalEmptySeconds);
+        flightSegmentDurationSeconds = Mathf.Max(2f, flightSegmentDurationSeconds);
+        preExitPortalEmptySeconds = Mathf.Max(0f, preExitPortalEmptySeconds);
+        postExitPortalEmptySeconds = Mathf.Max(0f, postExitPortalEmptySeconds);
+
+        flightModeGapBonus = Mathf.Clamp(flightModeGapBonus, 0f, 0.6f);
+
+        movingPipeHeightPadding = Mathf.Clamp(movingPipeHeightPadding, 0.15f, 0.75f);
+        movingPipeGapBonus = Mathf.Clamp(movingPipeGapBonus, 0f, 0.35f);
+
+        minimumPipesBetweenStaircases = Mathf.Max(0, minimumPipesBetweenStaircases);
+
+        minStaircaseLength = Mathf.Clamp(minStaircaseLength, 5, 9);
+        maxStaircaseLength = Mathf.Clamp(maxStaircaseLength, minStaircaseLength, 9);
+
+        staircaseStepHeight = Mathf.Clamp(staircaseStepHeight, 0.25f, 0.60f);
+        staircaseSpawnDelayMultiplier = Mathf.Clamp(staircaseSpawnDelayMultiplier, 0.65f, 1.15f);
+        minimumStaircaseSpawnDelay = Mathf.Max(0.50f, minimumStaircaseSpawnDelay);
+        staircaseRecoveryDelayMultiplier = Mathf.Max(1.00f, staircaseRecoveryDelayMultiplier);
+
+        if (safeWorldMaxCenterY < safeWorldMinCenterY)
+        {
+            float temporary = safeWorldMinCenterY;
+            safeWorldMinCenterY = safeWorldMaxCenterY;
+            safeWorldMaxCenterY = temporary;
         }
     }
 
@@ -123,15 +284,20 @@ public class Spawner : MonoBehaviour
     }
 
     /// <summary>
-    /// Основной цикл создания труб.
-    /// Coroutine используется вместо InvokeRepeating, потому что задержка между трубами
-    /// теперь меняется в зависимости от этапа сложности.
+    /// Основной цикл создания препятствий.
+    /// Если портальные режимы отключены, работает как обычный Spawner.
     /// </summary>
     private IEnumerator SpawnLoop()
     {
         while (true)
         {
             DifficultySettings settings = GetCurrentDifficultySettings();
+
+            if (ShouldStartPortalFlightSegment(settings))
+            {
+                yield return StartCoroutine(RunPortalFlightSegment());
+                continue;
+            }
 
             yield return new WaitForSeconds(settings.spawnDelay);
 
@@ -151,15 +317,306 @@ public class Spawner : MonoBehaviour
             }
             else
             {
-                SpawnSinglePipe(settings, SafeRandomRange(settings.minHeight, settings.maxHeight));
+                bool isMovingPipe = IsMovingPipe(settings);
+                float height = SelectFairHeight(settings, settings.minHeight, settings.maxHeight, isMovingPipe);
+                SpawnSinglePipe(settings, height, false);
             }
         }
     }
 
     /// <summary>
-    /// Старый таймер дня/ночи оставлен как запасной режим.
-    /// Если есть SkySwitcher, визуал труб берётся из него.
+    /// Полная портальная секция:
+    /// пустой участок -> portal_in -> Flight-трубы -> пустой участок -> portal_out -> обычная игра.
     /// </summary>
+    private IEnumerator RunPortalFlightSegment()
+    {
+        portalSegmentRunning = true;
+
+        LogPortalMessage(
+            $"[PORTAL] Подготовка Flight-секции. " +
+            $"Пустой участок перед portal_in: {prePortalEmptySeconds:F1} сек."
+        );
+
+        if (prePortalEmptySeconds > 0f)
+        {
+            yield return new WaitForSeconds(prePortalEmptySeconds);
+        }
+
+        DifficultySettings settingsAtPortalIn = GetCurrentDifficultySettings();
+        float portalSpeed = GetPortalSpeed(settingsAtPortalIn);
+
+        SpawnPortal(portalInPrefab, Player.PlayerMoveMode.Flight, portalSpeed);
+
+        bool flightPortalActivated = false;
+        yield return StartCoroutine(WaitForPortalActivation(Player.PlayerMoveMode.Flight, portalActivationTimeout, result =>
+        {
+            flightPortalActivated = result;
+        }));
+
+        if (!flightPortalActivated)
+        {
+            LogPortalMessage("[PORTAL] portal_in не был активирован. Flight-секция отменена.");
+            FinishPortalSegment();
+            yield break;
+        }
+
+        LogPortalMessage($"[PORTAL] Flight-секция началась. Длительность: {flightSegmentDurationSeconds:F1} сек.");
+
+        float elapsed = 0f;
+
+        while (elapsed < flightSegmentDurationSeconds)
+        {
+            DifficultySettings flightSettings = GetCurrentDifficultySettings();
+            float delay = Mathf.Max(minimumSpawnDelay, flightSettings.spawnDelay);
+
+            yield return new WaitForSeconds(delay);
+            elapsed += delay;
+
+            SpawnFlightModePipe(flightSettings);
+        }
+
+        LogPortalMessage(
+            $"[PORTAL] Подготовка выхода из Flight. " +
+            $"Пустой участок перед portal_out: {preExitPortalEmptySeconds:F1} сек."
+        );
+
+        if (preExitPortalEmptySeconds > 0f)
+        {
+            yield return new WaitForSeconds(preExitPortalEmptySeconds);
+        }
+
+        DifficultySettings settingsAtPortalOut = GetCurrentDifficultySettings();
+        float exitPortalSpeed = GetPortalSpeed(settingsAtPortalOut);
+
+        SpawnPortal(portalOutPrefab, Player.PlayerMoveMode.Flappy, exitPortalSpeed);
+
+        bool flappyPortalActivated = false;
+        yield return StartCoroutine(WaitForPortalActivation(Player.PlayerMoveMode.Flappy, portalActivationTimeout, result =>
+        {
+            flappyPortalActivated = result;
+        }));
+
+        if (!flappyPortalActivated)
+        {
+            Debug.LogWarning(
+                "[PORTAL] portal_out не был активирован за отведённое время. " +
+                "Это может означать, что портал стоит слишком высоко/низко или collider слишком узкий.",
+                this
+            );
+
+            if (forceFlappyOnExitPortalTimeout)
+            {
+                SetPlayerMode(Player.PlayerMoveMode.Flappy);
+
+                LogPortalMessage("[PORTAL] Игрок принудительно возвращён в Flappy из-за timeout portal_out.");
+            }
+        }
+
+        if (postExitPortalEmptySeconds > 0f)
+        {
+            yield return new WaitForSeconds(postExitPortalEmptySeconds);
+        }
+
+        FinishPortalSegment();
+    }
+
+    private void FinishPortalSegment()
+    {
+        portalSegmentRunning = false;
+        nextPortalSegmentAllowedTime = Time.time + minSecondsBetweenPortalSegments;
+        pipesSinceLastPortalSegment = 0;
+
+        LogPortalMessage(
+            $"[PORTAL] Flight-секция завершена. Следующая секция возможна не раньше чем через {minSecondsBetweenPortalSegments:F1} сек."
+        );
+    }
+
+    private void SpawnPortal(GameObject portalPrefab, Player.PlayerMoveMode targetMode, float speed)
+    {
+        if (portalPrefab == null)
+        {
+            Debug.LogError(
+                $"[PORTAL] Не назначен prefab портала для режима {targetMode}. " +
+                "Проверь Portal In Prefab / Portal Out Prefab в Spawner.",
+                this
+            );
+
+            return;
+        }
+
+        Vector3 spawnPosition = transform.position;
+        spawnPosition.y = portalSpawnY;
+
+        GameObject portalObject = Instantiate(portalPrefab, spawnPosition, portalPrefab.transform.rotation);
+
+        ModeSwitchPortal portal = portalObject.GetComponent<ModeSwitchPortal>();
+
+        if (portal == null)
+        {
+            portal = portalObject.AddComponent<ModeSwitchPortal>();
+
+            Debug.LogWarning(
+                $"[PORTAL] На prefab '{portalPrefab.name}' не было ModeSwitchPortal. Компонент добавлен автоматически.",
+                portalObject
+            );
+        }
+
+        portal.Configure(targetMode, speed, logPortalSegments);
+
+        LogPortalMessage(
+            $"[PORTAL] Создан портал '{portalPrefab.name}' -> {targetMode}. " +
+            $"Position: {spawnPosition}, Speed: {speed:F2}."
+        );
+    }
+
+    private IEnumerator WaitForPortalActivation(
+        Player.PlayerMoveMode targetMode,
+        float timeout,
+        System.Action<bool> onComplete)
+    {
+        waitingForPortalActivation = true;
+        expectedPortalActivated = false;
+        expectedPortalMode = targetMode;
+
+        float elapsed = 0f;
+
+        while (elapsed < timeout && !expectedPortalActivated)
+        {
+            elapsed += Time.deltaTime;
+            yield return null;
+        }
+
+        bool result = expectedPortalActivated;
+
+        waitingForPortalActivation = false;
+        expectedPortalActivated = false;
+
+        onComplete?.Invoke(result);
+    }
+
+    private void HandlePortalActivated(Player.PlayerMoveMode activatedMode, ModeSwitchPortal portal)
+    {
+        if (!waitingForPortalActivation)
+        {
+            return;
+        }
+
+        if (activatedMode != expectedPortalMode)
+        {
+            return;
+        }
+
+        expectedPortalActivated = true;
+
+        LogPortalMessage($"[PORTAL] Подтверждено прохождение портала. Режим: {activatedMode}.");
+    }
+
+    private float GetPortalSpeed(DifficultySettings settings)
+    {
+        Pipes basePrefab = GetSelectedPrefab(GetCurrentDayNightVisualState());
+
+        float baseSpeed = basePrefab != null ? basePrefab.speed : 5f;
+        float speed = baseSpeed * settings.speedMultiplier * portalSpeedMultiplier;
+
+        return Mathf.Clamp(speed, 3.5f, 6.5f);
+    }
+
+    /// <summary>
+    /// Flight использует обычные трубы, но с чуть большим gap.
+    /// Основная логика сложности сохраняется.
+    /// </summary>
+    private void SpawnFlightModePipe(DifficultySettings settings)
+    {
+        DifficultySettings modeSettings = settings;
+
+        modeSettings.verticalGap += flightModeGapBonus;
+        modeSettings.enableSuddenShift = false;
+        modeSettings.suddenShiftChance = 0f;
+        modeSettings.maxSuddenShifts = 0;
+        modeSettings.suddenShiftAmplitude = 0f;
+        modeSettings.allowStaircasePattern = false;
+        modeSettings.staircaseChance = 0f;
+
+        if (!allowMovingPipesInFlightMode)
+        {
+            modeSettings.passageMotionMode = Pipes.PassageMotionMode.Static;
+            modeSettings.centerMoveAmplitude = 0f;
+            modeSettings.centerMoveFrequency = 1f;
+            modeSettings.maxCenterOffset = 0f;
+
+            modeSettings.gapMotionMode = Pipes.GapMotionMode.Static;
+            modeSettings.minimumDynamicGap = modeSettings.verticalGap;
+            modeSettings.maximumDynamicGap = modeSettings.verticalGap;
+            modeSettings.gapPulseAmplitude = 0f;
+            modeSettings.gapPulseFrequency = 1f;
+        }
+
+        ApplySafetyLimits(ref modeSettings);
+
+        bool isMovingPipe = IsMovingPipe(modeSettings);
+        float height = SelectFairHeight(modeSettings, modeSettings.minHeight, modeSettings.maxHeight, isMovingPipe);
+
+        SpawnSinglePipe(modeSettings, height, false);
+    }
+
+    private bool ShouldStartPortalFlightSegment(DifficultySettings settings)
+    {
+        if (!enablePortalFlightSegments || portalSegmentRunning)
+        {
+            return false;
+        }
+
+        if (portalInPrefab == null || portalOutPrefab == null)
+        {
+            return false;
+        }
+
+        if (Time.time < nextPortalSegmentAllowedTime)
+        {
+            return false;
+        }
+
+        if (pipesSinceLastPortalSegment < minPipesBetweenPortalSegments)
+        {
+            return false;
+        }
+
+        int currentScore = GameManager.Instance != null ? GameManager.Instance.score : 0;
+
+        if (currentScore < minScoreBeforePortalSegments)
+        {
+            return false;
+        }
+
+        if (settings.stage < minDifficultyStageForPortalSegments)
+        {
+            return false;
+        }
+
+        return Random.value <= portalSegmentChancePerCheck;
+    }
+
+    private void LogPortalMessage(string message)
+    {
+        if (logPortalSegments)
+        {
+            Debug.Log(message, this);
+        }
+    }
+
+    private void SetPlayerMode(Player.PlayerMoveMode mode)
+    {
+        if (player == null)
+        {
+            player = FindObjectOfType<Player>();
+        }
+
+        if (player != null)
+        {
+            player.SetMoveMode(mode);
+        }
+    }
+
     private void UpdateFallbackDayNightTimer()
     {
         if (useSkySwitcherStateWhenAvailable && skySwitcher != null)
@@ -176,10 +633,7 @@ public class Spawner : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Создаёт одну трубу с параметрами текущего этапа сложности.
-    /// </summary>
-    private Pipes SpawnSinglePipe(DifficultySettings settings, float verticalOffset)
+    private Pipes SpawnSinglePipe(DifficultySettings settings, float verticalOffset, bool isPartOfStaircase)
     {
         bool visualIsDay = GetCurrentDayNightVisualState();
         Pipes selectedPrefab = GetSelectedPrefab(visualIsDay);
@@ -190,13 +644,33 @@ public class Spawner : MonoBehaviour
             return null;
         }
 
-        Vector3 spawnPosition = transform.position + Vector3.up * verticalOffset;
+        bool isMovingPipe = IsMovingPipe(settings);
+        float safeHeight = ClampHeightToFairRange(settings, verticalOffset, isMovingPipe);
+        float effectiveGap = settings.verticalGap;
+
+        if (isMovingPipe)
+        {
+            effectiveGap += settings.movingPipeGapBonus;
+        }
+
+        Vector3 spawnPosition = transform.position + Vector3.up * safeHeight;
         Pipes pipes = Instantiate(selectedPrefab, spawnPosition, Quaternion.identity);
 
-        pipes.Configure(settings.verticalGap, skySwitcher);
+        pipes.Configure(effectiveGap, skySwitcher);
         pipes.SetSprite(visualIsDay);
 
+        float effectiveMinimumDynamicGap = settings.minimumDynamicGap;
+        float effectiveMaximumDynamicGap = settings.maximumDynamicGap;
+
+        if (isMovingPipe)
+        {
+            effectiveMinimumDynamicGap = Mathf.Max(effectiveMinimumDynamicGap, effectiveGap - 0.14f);
+            effectiveMaximumDynamicGap = Mathf.Max(effectiveMaximumDynamicGap, effectiveGap + 0.14f);
+        }
+
         bool allowSuddenShiftForThisPipe =
+            !isMovingPipe &&
+            !isPartOfStaircase &&
             settings.enableSuddenShift &&
             Random.value <= settings.suddenShiftChance;
 
@@ -210,8 +684,8 @@ public class Spawner : MonoBehaviour
             newMaxCenterOffset: settings.maxCenterOffset,
 
             newGapMotionMode: settings.gapMotionMode,
-            newMinimumDynamicGap: settings.minimumDynamicGap,
-            newMaximumDynamicGap: settings.maximumDynamicGap,
+            newMinimumDynamicGap: effectiveMinimumDynamicGap,
+            newMaximumDynamicGap: effectiveMaximumDynamicGap,
             newGapPulseAmplitude: settings.gapPulseAmplitude,
             newGapPulseFrequency: settings.gapPulseFrequency,
             newGapPulsePhase: Random.Range(0f, Mathf.PI * 2f),
@@ -222,82 +696,37 @@ public class Spawner : MonoBehaviour
             suddenMaxDelay: settings.suddenShiftMaxDelay,
             maxSuddenShifts: settings.maxSuddenShifts,
             suddenLerpDuration: settings.suddenShiftDuration,
-            allowSuddenShiftUntilX: settings.suddenShiftAllowedUntilX
+            allowSuddenShiftUntilX: settings.suddenShiftAllowedUntilX,
+
+            newSafeWorldMinCenterY: safeWorldMinCenterY,
+            newSafeWorldMaxCenterY: safeWorldMaxCenterY
         );
+
+        RegisterSpawnHeight(safeHeight);
 
         return pipes;
     }
 
-    /// <summary>
-    /// Создаёт серию труб в форме ступенек.
-    ///
-    /// Варианты серии:
-    /// 0 — ступеньки вверх;
-    /// 1 — ступеньки вниз;
-    /// 2 — смешанный паттерн вверх+вниз или вниз+вверх.
-    ///
-    /// Важно:
-    /// ступенчатая серия специально делается без вертикального движения,
-    /// без изменения gap и без резких сдвигов.
-    /// Сложность создаётся только формой серии.
-    /// </summary>
     private IEnumerator SpawnStaircasePattern(DifficultySettings settings)
     {
-        int minLength = Mathf.Max(3, minStaircaseLength);
-        int maxLength = Mathf.Max(minLength, maxStaircaseLength);
+        int minLength = Mathf.Clamp(minStaircaseLength, 5, 9);
+        int maxLength = Mathf.Clamp(maxStaircaseLength, minLength, 9);
         int length = Random.Range(minLength, maxLength + 1);
 
-        float stepHeight = Mathf.Max(0.1f, staircaseStepHeight);
+        float stepHeight = Mathf.Clamp(staircaseStepHeight, 0.25f, 0.60f);
 
-        // 0 — вверх, 1 — вниз, 2 — вверх+вниз / вниз+вверх.
-        int patternType = Random.Range(0, 3);
+        bool directionIsUp = Random.value < 0.5f;
+        float directionMultiplier = directionIsUp ? 1f : -1f;
 
         float[] heightOffsets = new float[length];
 
-        if (patternType == 0)
+        for (int i = 0; i < length; i++)
         {
-            // Ступеньки вверх:
-            // 0, +step, +2step, +3step...
-            for (int i = 0; i < length; i++)
-            {
-                heightOffsets[i] = stepHeight * i;
-            }
-        }
-        else if (patternType == 1)
-        {
-            // Ступеньки вниз:
-            // 0, -step, -2step, -3step...
-            for (int i = 0; i < length; i++)
-            {
-                heightOffsets[i] = -stepHeight * i;
-            }
-        }
-        else
-        {
-            // Смешанный паттерн:
-            // например: 0, +step, +2step, +step, 0
-            // или:      0, -step, -2step, -step, 0
-            bool firstDirectionIsUp = Random.value < 0.5f;
-            int peakIndex = Mathf.Max(1, length / 2);
+            int ascendingLevel = i;
+            int descendingLevel = length - 1 - i;
+            int level = Mathf.Min(ascendingLevel, descendingLevel);
 
-            for (int i = 0; i < length; i++)
-            {
-                int level;
-
-                if (i <= peakIndex)
-                {
-                    level = i;
-                }
-                else
-                {
-                    level = peakIndex - (i - peakIndex);
-                }
-
-                level = Mathf.Max(0, level);
-
-                float signedStep = firstDirectionIsUp ? stepHeight : -stepHeight;
-                heightOffsets[i] = signedStep * level;
-            }
+            heightOffsets[i] = directionMultiplier * stepHeight * level;
         }
 
         float minOffset = heightOffsets[0];
@@ -309,8 +738,6 @@ public class Spawner : MonoBehaviour
             maxOffset = Mathf.Max(maxOffset, heightOffsets[i]);
         }
 
-        // Подбираем базовую высоту так, чтобы вся серия по возможности помещалась
-        // в допустимый диапазон minHeight/maxHeight текущей сложности.
         float minBaseHeight = settings.minHeight - minOffset;
         float maxBaseHeight = settings.maxHeight - maxOffset;
 
@@ -318,12 +745,10 @@ public class Spawner : MonoBehaviour
 
         if (minBaseHeight <= maxBaseHeight)
         {
-            baseHeight = SafeRandomRange(minBaseHeight, maxBaseHeight);
+            baseHeight = SelectFairHeight(settings, minBaseHeight, maxBaseHeight, false);
         }
         else
         {
-            // Запасной вариант для слишком большого паттерна:
-            // центрируем серию и затем дополнительно clamp-им каждую трубу.
             float rangeCenter = (settings.minHeight + settings.maxHeight) * 0.5f;
             float offsetCenter = (minOffset + maxOffset) * 0.5f;
             baseHeight = rangeCenter - offsetCenter;
@@ -336,20 +761,17 @@ public class Spawner : MonoBehaviour
 
         DifficultySettings patternSettings = settings;
 
-        // Ступенчатая серия должна быть статичной.
         patternSettings.passageMotionMode = Pipes.PassageMotionMode.Static;
         patternSettings.centerMoveAmplitude = 0f;
         patternSettings.centerMoveFrequency = 1f;
         patternSettings.maxCenterOffset = 0f;
 
-        // Gap в ступенчатой серии не должен пульсировать.
         patternSettings.gapMotionMode = Pipes.GapMotionMode.Static;
         patternSettings.minimumDynamicGap = patternSettings.verticalGap;
         patternSettings.maximumDynamicGap = patternSettings.verticalGap;
         patternSettings.gapPulseAmplitude = 0f;
         patternSettings.gapPulseFrequency = 1f;
 
-        // Резкие сдвиги в ступенчатой серии отключены.
         patternSettings.enableSuddenShift = false;
         patternSettings.suddenShiftChance = 0f;
         patternSettings.maxSuddenShifts = 0;
@@ -360,19 +782,22 @@ public class Spawner : MonoBehaviour
             float height = baseHeight + heightOffsets[i];
             height = Mathf.Clamp(height, settings.minHeight, settings.maxHeight);
 
-            SpawnSinglePipe(patternSettings, height);
+            SpawnSinglePipe(patternSettings, height, true);
 
             if (i < length - 1)
             {
                 yield return new WaitForSeconds(internalDelay);
             }
         }
+
+        pipesSinceLastStaircase = 0;
+
+        Debug.Log(
+            $"Spawner: создана ступенчатая серия. Тип: {(directionIsUp ? "горка вверх" : "яма вниз")}, длина: {length}, шаг: {stepHeight:F2}.",
+            this
+        );
     }
 
-    /// <summary>
-    /// Возвращает настройки текущей сложности по score.
-    /// Этап меняется каждые pointsPerDifficultyStage очков.
-    /// </summary>
     private DifficultySettings GetCurrentDifficultySettings()
     {
         int stage = useScoreBasedDifficulty ? GetDifficultyStageFromScore() : 0;
@@ -381,119 +806,80 @@ public class Spawner : MonoBehaviour
         switch (stage)
         {
             case 0:
-                // 0–19 очков: базовая рабочая версия.
                 break;
 
             case 1:
-                // 20–39 очков: немного выше скорость, плотнее трубы, уже проход, шире разброс высоты.
-                settings.spawnDelay = spawnRate * 0.92f;
-                settings.verticalGap = verticalGap * 0.92f;
-                settings.minHeight = minHeight - 0.15f;
-                settings.maxHeight = maxHeight + 0.15f;
-                settings.speedMultiplier = 1.08f;
+                settings.spawnDelay = spawnRate * 0.94f;
+                settings.verticalGap = verticalGap * 0.94f;
+                settings.minHeight = minHeight - 0.12f;
+                settings.maxHeight = maxHeight + 0.12f;
+                settings.speedMultiplier = 1.07f;
                 break;
 
             case 2:
-                // 40–59 очков: проход начинает плавно двигаться вверх-вниз.
-                settings.spawnDelay = spawnRate * 0.86f;
-                settings.verticalGap = verticalGap * 0.86f;
-                settings.minHeight = minHeight - 0.35f;
-                settings.maxHeight = maxHeight + 0.35f;
-                settings.speedMultiplier = 1.14f;
+                settings.spawnDelay = spawnRate * 0.90f;
+                settings.verticalGap = verticalGap * 0.90f;
+                settings.minHeight = minHeight - 0.22f;
+                settings.maxHeight = maxHeight + 0.22f;
+                settings.speedMultiplier = 1.12f;
 
                 settings.passageMotionMode = Pipes.PassageMotionMode.SmoothSine;
-                settings.centerMoveAmplitude = 0.35f;
-                settings.centerMoveFrequency = 1.15f;
-                settings.maxCenterOffset = 0.55f;
+                settings.centerMoveAmplitude = 0.38f;
+                settings.centerMoveFrequency = 1.05f;
+                settings.maxCenterOffset = 0.56f;
+                settings.movingPipeGapBonus = movingPipeGapBonus;
                 break;
 
             case 3:
-                // 60–79 очков: проход двигается иначе, gap начинает сужаться/расширяться,
-                // часть труб резко меняет положение прохода.
-                settings.spawnDelay = spawnRate * 0.80f;
-                settings.verticalGap = verticalGap * 0.80f;
-                settings.minHeight = minHeight - 0.50f;
-                settings.maxHeight = maxHeight + 0.50f;
-                settings.speedMultiplier = 1.20f;
+                settings.spawnDelay = spawnRate * 0.86f;
+                settings.verticalGap = verticalGap * 0.87f;
+                settings.minHeight = minHeight - 0.30f;
+                settings.maxHeight = maxHeight + 0.30f;
+                settings.speedMultiplier = 1.17f;
 
                 settings.passageMotionMode = Pipes.PassageMotionMode.SmoothPingPong;
-                settings.centerMoveAmplitude = 0.45f;
-                settings.centerMoveFrequency = 0.95f;
-                settings.maxCenterOffset = 0.75f;
+                settings.centerMoveAmplitude = 0.48f;
+                settings.centerMoveFrequency = 1.05f;
+                settings.maxCenterOffset = 0.68f;
+                settings.movingPipeGapBonus = movingPipeGapBonus + 0.03f;
 
                 settings.gapMotionMode = Pipes.GapMotionMode.SmoothPulse;
-                settings.minimumDynamicGap = Mathf.Max(minimumDynamicGap, settings.verticalGap - 0.22f);
-                settings.maximumDynamicGap = settings.verticalGap + 0.15f;
-                settings.gapPulseAmplitude = 0.20f;
-                settings.gapPulseFrequency = 1.20f;
-
-                settings.enableSuddenShift = true;
-                settings.suddenShiftChance = 0.38f;
-                settings.maxSuddenShifts = 1;
-                settings.suddenShiftAmplitude = 0.42f;
-                settings.suddenShiftMinDelay = 0.35f;
-                settings.suddenShiftMaxDelay = 0.90f;
-                settings.suddenShiftDuration = 0.10f;
-                settings.suddenShiftAllowedUntilX = 1.75f;
+                settings.minimumDynamicGap = settings.verticalGap - 0.12f;
+                settings.maximumDynamicGap = settings.verticalGap + 0.16f;
+                settings.gapPulseAmplitude = 0.12f;
+                settings.gapPulseFrequency = 1.05f;
                 break;
 
             default:
-                // 80+ очков: поздняя игра.
-                // Обычные трубы могут двигаться, менять gap и иногда резко смещать проход.
-                // Иногда появляются статичные ступенчатые серии.
-                settings.spawnDelay = spawnRate * 0.74f;
-                settings.verticalGap = verticalGap * 0.76f;
-                settings.minHeight = minHeight - 0.65f;
-                settings.maxHeight = maxHeight + 0.65f;
-                settings.speedMultiplier = 1.25f;
+                settings.spawnDelay = spawnRate * 0.82f;
+                settings.verticalGap = verticalGap * 0.84f;
+                settings.minHeight = minHeight - 0.36f;
+                settings.maxHeight = maxHeight + 0.36f;
+                settings.speedMultiplier = 1.22f;
 
                 settings.passageMotionMode = Pipes.PassageMotionMode.SmoothSine;
-                settings.centerMoveAmplitude = 0.55f;
-                settings.centerMoveFrequency = 1.45f;
-                settings.maxCenterOffset = 0.90f;
+                settings.centerMoveAmplitude = 0.58f;
+                settings.centerMoveFrequency = 1.20f;
+                settings.maxCenterOffset = 0.78f;
+                settings.movingPipeGapBonus = movingPipeGapBonus + 0.06f;
 
                 settings.gapMotionMode = Pipes.GapMotionMode.SmoothPulse;
-                settings.minimumDynamicGap = Mathf.Max(minimumDynamicGap, settings.verticalGap - 0.30f);
-                settings.maximumDynamicGap = settings.verticalGap + 0.20f;
-                settings.gapPulseAmplitude = 0.26f;
-                settings.gapPulseFrequency = 1.35f;
+                settings.minimumDynamicGap = settings.verticalGap - 0.14f;
+                settings.maximumDynamicGap = settings.verticalGap + 0.18f;
+                settings.gapPulseAmplitude = 0.14f;
+                settings.gapPulseFrequency = 1.12f;
 
-                settings.enableSuddenShift = true;
-                settings.suddenShiftChance = 0.48f;
-                settings.maxSuddenShifts = 1;
-                settings.suddenShiftAmplitude = 0.52f;
-                settings.suddenShiftMinDelay = 0.30f;
-                settings.suddenShiftMaxDelay = 0.80f;
-                settings.suddenShiftDuration = 0.09f;
-                settings.suddenShiftAllowedUntilX = 1.90f;
+                settings.enableSuddenShift = false;
+                settings.suddenShiftChance = 0f;
+                settings.maxSuddenShifts = 0;
+                settings.suddenShiftAmplitude = 0f;
 
                 settings.allowStaircasePattern = enableStaircasePatterns;
-                settings.staircaseChance = 0.26f;
+                settings.staircaseChance = 0.16f;
                 break;
         }
 
-        settings.spawnDelay = Mathf.Max(minimumSpawnDelay, settings.spawnDelay);
-        settings.verticalGap = Mathf.Max(minimumVerticalGap, settings.verticalGap);
-
-        if (settings.gapMotionMode == Pipes.GapMotionMode.Static)
-        {
-            settings.minimumDynamicGap = settings.verticalGap;
-            settings.maximumDynamicGap = settings.verticalGap;
-            settings.gapPulseAmplitude = 0f;
-        }
-        else
-        {
-            settings.minimumDynamicGap = Mathf.Max(0.1f, settings.minimumDynamicGap);
-            settings.maximumDynamicGap = Mathf.Max(settings.minimumDynamicGap, settings.maximumDynamicGap);
-        }
-
-        if (settings.maxHeight < settings.minHeight)
-        {
-            float temporary = settings.minHeight;
-            settings.minHeight = settings.maxHeight;
-            settings.maxHeight = temporary;
-        }
-
+        ApplySafetyLimits(ref settings);
         return settings;
     }
 
@@ -513,6 +899,7 @@ public class Spawner : MonoBehaviour
         settings.centerMoveAmplitude = 0f;
         settings.centerMoveFrequency = 1f;
         settings.maxCenterOffset = 0f;
+        settings.movingPipeGapBonus = 0f;
 
         settings.gapMotionMode = Pipes.GapMotionMode.Static;
         settings.minimumDynamicGap = verticalGap;
@@ -524,10 +911,10 @@ public class Spawner : MonoBehaviour
         settings.suddenShiftChance = 0f;
         settings.maxSuddenShifts = 0;
         settings.suddenShiftAmplitude = 0f;
-        settings.suddenShiftMinDelay = 0.35f;
-        settings.suddenShiftMaxDelay = 0.90f;
-        settings.suddenShiftDuration = 0.10f;
-        settings.suddenShiftAllowedUntilX = 1.75f;
+        settings.suddenShiftMinDelay = 0.45f;
+        settings.suddenShiftMaxDelay = 1.1f;
+        settings.suddenShiftDuration = 0.18f;
+        settings.suddenShiftAllowedUntilX = 3.5f;
 
         settings.allowStaircasePattern = false;
         settings.staircaseChance = 0f;
@@ -535,13 +922,237 @@ public class Spawner : MonoBehaviour
         return settings;
     }
 
-    /// <summary>
-    /// Вычисляет этап сложности из GameManager.Instance.score.
-    /// GameManager менять не нужно.
-    /// </summary>
+    private void ApplySafetyLimits(ref DifficultySettings settings)
+    {
+        settings.spawnDelay = Mathf.Max(GetRecommendedMinimumSpawnDelay(settings.stage), settings.spawnDelay, minimumSpawnDelay);
+        settings.verticalGap = Mathf.Max(GetRecommendedMinimumGap(settings.stage), settings.verticalGap, minimumVerticalGap);
+
+        if (settings.maxHeight < settings.minHeight)
+        {
+            float temporary = settings.minHeight;
+            settings.minHeight = settings.maxHeight;
+            settings.maxHeight = temporary;
+        }
+
+        settings.minHeight = Mathf.Max(settings.minHeight, safeWorldMinCenterY + 0.08f);
+        settings.maxHeight = Mathf.Min(settings.maxHeight, safeWorldMaxCenterY - 0.08f);
+
+        if (settings.maxHeight < settings.minHeight)
+        {
+            float center = (safeWorldMinCenterY + safeWorldMaxCenterY) * 0.5f;
+            settings.minHeight = center - 0.5f;
+            settings.maxHeight = center + 0.5f;
+        }
+
+        if (settings.gapMotionMode == Pipes.GapMotionMode.Static)
+        {
+            settings.minimumDynamicGap = settings.verticalGap;
+            settings.maximumDynamicGap = settings.verticalGap;
+            settings.gapPulseAmplitude = 0f;
+        }
+        else
+        {
+            settings.minimumDynamicGap = Mathf.Max(
+                minimumDynamicGap,
+                settings.verticalGap - 0.18f,
+                settings.minimumDynamicGap
+            );
+
+            settings.maximumDynamicGap = Mathf.Max(
+                settings.minimumDynamicGap,
+                settings.maximumDynamicGap
+            );
+
+            settings.gapPulseAmplitude = Mathf.Min(settings.gapPulseAmplitude, 0.16f);
+        }
+
+        if (IsMovingPipe(settings))
+        {
+            settings.centerMoveAmplitude = Mathf.Min(settings.centerMoveAmplitude, 0.62f);
+            settings.maxCenterOffset = Mathf.Min(settings.maxCenterOffset, 0.82f);
+            settings.centerMoveFrequency = Mathf.Min(settings.centerMoveFrequency, 1.25f);
+
+            settings.enableSuddenShift = false;
+            settings.suddenShiftChance = 0f;
+            settings.maxSuddenShifts = 0;
+            settings.suddenShiftAmplitude = 0f;
+        }
+    }
+
+    private float GetRecommendedMinimumSpawnDelay(int stage)
+    {
+        if (stage <= 0) return 0.95f;
+        if (stage == 1) return 0.90f;
+        if (stage == 2) return 0.86f;
+        if (stage == 3) return 0.82f;
+
+        return 0.80f;
+    }
+
+    private float GetRecommendedMinimumGap(int stage)
+    {
+        if (stage <= 0) return 2.80f;
+        if (stage == 1) return 2.70f;
+        if (stage == 2) return 2.58f;
+        if (stage == 3) return 2.45f;
+
+        return 2.36f;
+    }
+
+    private float SelectFairHeight(DifficultySettings settings, float requestedMin, float requestedMax, bool isMovingPipe)
+    {
+        float min = Mathf.Min(requestedMin, requestedMax);
+        float max = Mathf.Max(requestedMin, requestedMax);
+
+        if (!useFairSpawnDirector)
+        {
+            return SafeRandomRange(min, max);
+        }
+
+        if (isMovingPipe)
+        {
+            float paddedMin = min + movingPipeHeightPadding;
+            float paddedMax = max - movingPipeHeightPadding;
+
+            if (paddedMin <= paddedMax)
+            {
+                min = paddedMin;
+                max = paddedMax;
+            }
+        }
+
+        if (hasLastSpawnHeight)
+        {
+            float maxDelta = GetMaxHeightDelta(settings.stage, isMovingPipe);
+            min = Mathf.Max(min, lastSpawnHeight - maxDelta);
+            max = Mathf.Min(max, lastSpawnHeight + maxDelta);
+        }
+
+        if (max < min)
+        {
+            float fallback = hasLastSpawnHeight
+                ? Mathf.Clamp(lastSpawnHeight, requestedMin, requestedMax)
+                : (requestedMin + requestedMax) * 0.5f;
+
+            return fallback;
+        }
+
+        float candidate = SafeRandomRange(min, max);
+
+        if (hasLastSpawnHeight)
+        {
+            candidate = PreventOppositeExtremeJump(candidate, settings, isMovingPipe);
+        }
+
+        return Mathf.Clamp(candidate, requestedMin, requestedMax);
+    }
+
+    private float ClampHeightToFairRange(DifficultySettings settings, float height, bool isMovingPipe)
+    {
+        float min = settings.minHeight;
+        float max = settings.maxHeight;
+
+        if (isMovingPipe)
+        {
+            float paddedMin = min + movingPipeHeightPadding;
+            float paddedMax = max - movingPipeHeightPadding;
+
+            if (paddedMin <= paddedMax)
+            {
+                min = paddedMin;
+                max = paddedMax;
+            }
+        }
+
+        if (hasLastSpawnHeight && useFairSpawnDirector)
+        {
+            float maxDelta = GetMaxHeightDelta(settings.stage, isMovingPipe);
+            min = Mathf.Max(min, lastSpawnHeight - maxDelta);
+            max = Mathf.Min(max, lastSpawnHeight + maxDelta);
+        }
+
+        if (max < min)
+        {
+            return Mathf.Clamp(height, settings.minHeight, settings.maxHeight);
+        }
+
+        return Mathf.Clamp(height, min, max);
+    }
+
+    private float PreventOppositeExtremeJump(float candidate, DifficultySettings settings, bool isMovingPipe)
+    {
+        float range = Mathf.Max(0.01f, settings.maxHeight - settings.minHeight);
+        float lowerExtreme = settings.minHeight + range * 0.24f;
+        float upperExtreme = settings.maxHeight - range * 0.24f;
+        float center = (settings.minHeight + settings.maxHeight) * 0.5f;
+        float centerBand = isMovingPipe ? range * 0.14f : range * 0.20f;
+
+        bool lastWasLow = lastSpawnHeight <= lowerExtreme;
+        bool lastWasHigh = lastSpawnHeight >= upperExtreme;
+
+        if (lastWasLow && candidate >= upperExtreme)
+        {
+            return SafeRandomRange(center - centerBand, center + centerBand);
+        }
+
+        if (lastWasHigh && candidate <= lowerExtreme)
+        {
+            return SafeRandomRange(center - centerBand, center + centerBand);
+        }
+
+        return candidate;
+    }
+
+    private float GetMaxHeightDelta(int stage, bool isMovingPipe)
+    {
+        float maxDelta;
+
+        if (stage <= 0)
+        {
+            maxDelta = 1.05f;
+        }
+        else if (stage == 1)
+        {
+            maxDelta = 1.14f;
+        }
+        else if (stage == 2)
+        {
+            maxDelta = 1.24f;
+        }
+        else if (stage == 3)
+        {
+            maxDelta = 1.34f;
+        }
+        else
+        {
+            maxDelta = 1.42f;
+        }
+
+        if (isMovingPipe)
+        {
+            maxDelta -= 0.16f;
+        }
+
+        return Mathf.Max(0.85f, maxDelta);
+    }
+
+    private void RegisterSpawnHeight(float height)
+    {
+        lastSpawnHeight = height;
+        hasLastSpawnHeight = true;
+
+        pipesSinceLastStaircase++;
+        pipesSinceLastPortalSegment++;
+    }
+
+    private bool IsMovingPipe(DifficultySettings settings)
+    {
+        return settings.passageMotionMode != Pipes.PassageMotionMode.Static;
+    }
+
     private int GetDifficultyStageFromScore()
     {
-        int safeStep = Mathf.Max(1, pointsPerDifficultyStage);
+        int safeStep = Mathf.Max(20, pointsPerDifficultyStage);
         int currentScore = 0;
 
         if (GameManager.Instance != null)
@@ -554,7 +1165,17 @@ public class Spawner : MonoBehaviour
 
     private bool ShouldSpawnStaircase(DifficultySettings settings)
     {
+        if (portalSegmentRunning)
+        {
+            return false;
+        }
+
         if (!settings.allowStaircasePattern)
+        {
+            return false;
+        }
+
+        if (pipesSinceLastStaircase < minimumPipesBetweenStaircases)
         {
             return false;
         }
@@ -590,30 +1211,6 @@ public class Spawner : MonoBehaviour
         return visualIsDay ? nightPipesPrefab : dayPipesPrefab;
     }
 
-    private float GetSafeStaircaseStartHeight(DifficultySettings settings, int direction, float totalHeight)
-    {
-        if (direction > 0)
-        {
-            float maxStart = settings.maxHeight - totalHeight;
-
-            if (maxStart >= settings.minHeight)
-            {
-                return SafeRandomRange(settings.minHeight, maxStart);
-            }
-        }
-        else
-        {
-            float minStart = settings.minHeight + totalHeight;
-
-            if (minStart <= settings.maxHeight)
-            {
-                return SafeRandomRange(minStart, settings.maxHeight);
-            }
-        }
-
-        return SafeRandomRange(settings.minHeight, settings.maxHeight);
-    }
-
     private float SafeRandomRange(float min, float max)
     {
         if (max < min)
@@ -646,7 +1243,11 @@ public class Spawner : MonoBehaviour
         lastLoggedDifficultyStage = stage;
 
         int currentScore = GameManager.Instance != null ? GameManager.Instance.score : 0;
-        Debug.Log($"Spawner: активен этап сложности {stage}. Score: {currentScore}", this);
+        int safeStep = Mathf.Max(20, pointsPerDifficultyStage);
+        int fromScore = stage * safeStep;
+        int toScore = fromScore + safeStep - 1;
+
+        Debug.Log($"Spawner: активен этап сложности {stage}. Score: {currentScore}. Диапазон этапа: {fromScore}–{toScore}.", this);
     }
 
     private struct DifficultySettings
@@ -663,6 +1264,7 @@ public class Spawner : MonoBehaviour
         public float centerMoveAmplitude;
         public float centerMoveFrequency;
         public float maxCenterOffset;
+        public float movingPipeGapBonus;
 
         public Pipes.GapMotionMode gapMotionMode;
         public float minimumDynamicGap;
