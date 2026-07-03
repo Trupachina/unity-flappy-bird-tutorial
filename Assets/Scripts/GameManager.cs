@@ -51,6 +51,9 @@ public class GameManager : MonoBehaviour
     [SerializeField] private float gameOverManualRestartDelay = 10f;
 
     [Header("Демонстрационное видео главного экрана")]
+    [Tooltip("Главный переключатель демонстрационного видео. Если выключен, видео полностью не запускается и не инициализируется.")]
+    [SerializeField] private bool enableDemoVideo = false;
+
     [SerializeField] private GameObject videoContainer;
     [SerializeField] private VideoPlayer videoPlayer;
     [SerializeField] private RawImage videoDisplay;
@@ -163,7 +166,14 @@ public class GameManager : MonoBehaviour
 
         SetAnimatorsUpdateMode(AnimatorUpdateMode.UnscaledTime);
 
-        InitializeVideoSystem();
+        if (enableDemoVideo)
+        {
+            InitializeVideoSystem();
+        }
+        else
+        {
+            DisableDemoVideoCompletely();
+        }
 
         if (PlayerPrefs.HasKey("ExtraLife"))
         {
@@ -171,7 +181,7 @@ public class GameManager : MonoBehaviour
             PlayerPrefs.DeleteKey("ExtraLife");
         }
 
-        if (lives <= 0 && !isGameOver && playButton != null && playButton.activeSelf)
+        if (enableDemoVideo && lives <= 0 && !isGameOver && playButton != null && playButton.activeSelf)
         {
             StartVideoCountdown();
         }
@@ -513,8 +523,6 @@ public class GameManager : MonoBehaviour
 
         Debug.Log($"Добавлено жизней: {livesPerToken}. Текущее количество: {lives}");
 
-        // При добавлении жизни демонстрационное видео должно полностью остановиться,
-        // потому что игрок уже может начать игру или продолжить после Game Over.
         StopVideoCompletely();
 
         if (isGameOver && deathTimerCoroutine != null)
@@ -669,6 +677,12 @@ public class GameManager : MonoBehaviour
 
     private void InitializeVideoSystem()
     {
+        if (!enableDemoVideo)
+        {
+            DisableDemoVideoCompletely();
+            return;
+        }
+
         if (videoPlayer == null || videoDisplay == null)
         {
             return;
@@ -687,7 +701,13 @@ public class GameManager : MonoBehaviour
 
         videoPlayer.targetTexture = renderTexture;
         videoDisplay.texture = renderTexture;
+        videoDisplay.enabled = true;
         videoDisplay.color = new Color(1f, 1f, 1f, 0f);
+
+        if (!videoPlayer.enabled)
+        {
+            videoPlayer.enabled = true;
+        }
 
         videoAudioSource = videoPlayer.GetComponent<AudioSource>();
 
@@ -695,10 +715,70 @@ public class GameManager : MonoBehaviour
         {
             Debug.LogWarning("У видео нет компонента AudioSource!");
         }
+        else if (!videoAudioSource.enabled)
+        {
+            videoAudioSource.enabled = true;
+        }
+    }
+
+    private void DisableDemoVideoCompletely()
+    {
+        if (videoCountdownCoroutine != null)
+        {
+            StopCoroutine(videoCountdownCoroutine);
+            videoCountdownCoroutine = null;
+        }
+
+        if (videoFadeCoroutine != null)
+        {
+            StopCoroutine(videoFadeCoroutine);
+            videoFadeCoroutine = null;
+        }
+
+        isVideoPlaying = false;
+
+        if (videoPlayer != null)
+        {
+            if (videoPlayer.isPlaying)
+            {
+                videoPlayer.Stop();
+            }
+
+            videoPlayer.enabled = false;
+
+            if (videoAudioSource == null)
+            {
+                videoAudioSource = videoPlayer.GetComponent<AudioSource>();
+            }
+        }
+
+        if (videoAudioSource != null)
+        {
+            videoAudioSource.Stop();
+            videoAudioSource.enabled = false;
+        }
+
+        if (videoDisplay != null)
+        {
+            videoDisplay.color = new Color(1f, 1f, 1f, 0f);
+            videoDisplay.enabled = false;
+        }
+
+        if (videoContainer != null)
+        {
+            videoContainer.SetActive(false);
+        }
+
+        Debug.Log("[GameManager] Демонстрационное видео отключено через enableDemoVideo = false.");
     }
 
     private void StartVideoCountdown()
     {
+        if (!enableDemoVideo)
+        {
+            return;
+        }
+
         if (!IsDemoVideoAllowed())
         {
             return;
@@ -716,6 +796,12 @@ public class GameManager : MonoBehaviour
 
     private IEnumerator VideoCountdownRoutine()
     {
+        if (!enableDemoVideo)
+        {
+            videoCountdownCoroutine = null;
+            yield break;
+        }
+
         float firstDelay = Mathf.Max(0f, videoDelay);
 
         if (firstDelay > 0f)
@@ -811,7 +897,8 @@ public class GameManager : MonoBehaviour
 
     private bool IsDemoVideoAllowed()
     {
-        return videoPlayer != null &&
+        return enableDemoVideo &&
+               videoPlayer != null &&
                videoContainer != null &&
                playButton != null &&
                playButton.activeSelf &&
@@ -822,6 +909,11 @@ public class GameManager : MonoBehaviour
 
     private void PlayVideo()
     {
+        if (!enableDemoVideo)
+        {
+            return;
+        }
+
         if (videoPlayer == null || videoContainer == null)
         {
             return;
@@ -833,7 +925,13 @@ public class GameManager : MonoBehaviour
 
         if (videoDisplay != null)
         {
+            videoDisplay.enabled = true;
             videoDisplay.color = new Color(1f, 1f, 1f, 0f);
+        }
+
+        if (!videoPlayer.enabled)
+        {
+            videoPlayer.enabled = true;
         }
 
         videoPlayer.Stop();
@@ -883,6 +981,11 @@ public class GameManager : MonoBehaviour
 
         if (!isVideoPlaying)
         {
+            if (!enableDemoVideo && videoContainer != null)
+            {
+                videoContainer.SetActive(false);
+            }
+
             return;
         }
 
@@ -924,6 +1027,11 @@ public class GameManager : MonoBehaviour
 
     private void MuteAllSoundsExceptVideo()
     {
+        if (!enableDemoVideo)
+        {
+            return;
+        }
+
         StopStartScreenMusicLoop(true);
 
         allAudioSources = FindObjectsOfType<AudioSource>();
@@ -1024,7 +1132,7 @@ public class GameManager : MonoBehaviour
 
     private void Update()
     {
-        if (isVideoPlaying && IsJumpPressed())
+        if (enableDemoVideo && isVideoPlaying && IsJumpPressed())
         {
             StopVideoForCycle();
             return;
@@ -1038,20 +1146,20 @@ public class GameManager : MonoBehaviour
 
         if (playButton != null &&
             playButton.activeSelf &&
-            Input.GetKeyDown(KeyCode.Space) &&
+            IsJumpPressed() &&
             !isGameOver &&
             lives > 0)
         {
             Play();
         }
 
-        if (awaitingSpaceToResume && Input.GetKeyDown(KeyCode.Space))
+        if (awaitingSpaceToResume && IsJumpPressed())
         {
             awaitingSpaceToResume = false;
             Play();
         }
 
-        if (isPausedAfterCollision && Input.GetKeyDown(KeyCode.Space))
+        if (isPausedAfterCollision && IsJumpPressed())
         {
             isPausedAfterCollision = false;
             StartCoroutine(GrantInvincibility(0.5f));

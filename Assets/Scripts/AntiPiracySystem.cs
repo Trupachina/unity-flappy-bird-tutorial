@@ -1,110 +1,141 @@
 using UnityEngine;
 using System;
 using System.IO;
+
+#if UNITY_STANDALONE_WIN
 using System.Runtime.InteropServices;
+#endif
 
 [DefaultExecutionOrder(-1000)]
 public class AntiPiracySystem : MonoBehaviour
 {
+    [Header("Anti Piracy Settings")]
+    [Tooltip("Если выключено, проверка привязки к устройству не выполняется.")]
+    [SerializeField] private bool enableAntiPiracyCheck = true;
+
+    [Tooltip("Если включено, игра закроется при несовпадении ключа устройства.")]
+    [SerializeField] private bool quitApplicationOnPiracyDetected = true;
+
     private string deviceKey;
     private string savedKey;
     private string installKeyPath;
     private string userKeyPath;
 
-    void Start()
+    private void Start()
     {
-        // Получаем уникальный идентификатор устройства
+        if (!enableAntiPiracyCheck)
+        {
+            Debug.Log("[AntiPiracy] Проверка отключена в настройках компонента.");
+            return;
+        }
+
         deviceKey = SystemInfo.deviceUniqueIdentifier;
 
-        // Пути хранения файла
-        // В билде: Application.dataPath — это папка *_Data рядом с .exe
-        // В Editor: это папка Assets проекта
+        if (string.IsNullOrEmpty(deviceKey))
+        {
+            Debug.LogWarning("[AntiPiracy] SystemInfo.deviceUniqueIdentifier пустой. Проверка пропущена, чтобы не заблокировать игру.");
+            return;
+        }
+
         installKeyPath = Path.Combine(Application.dataPath, "device_key.txt");
         userKeyPath = Path.Combine(Application.persistentDataPath, "device_key.txt");
 
-        bool keyLoaded = false;
+        bool keyLoaded = TryLoadOrCreateKeyInInstallFolder();
 
-        // 1) Пробуем работать с папкой установки (installKeyPath)
+        if (!keyLoaded)
+        {
+            keyLoaded = TryLoadOrCreateKeyInPersistentFolder();
+        }
+
+        if (!keyLoaded)
+        {
+            Debug.LogWarning("[AntiPiracy] Не удалось загрузить или создать ключ. Текущее устройство считается разрешённым, чтобы не заблокировать игру из-за файловой системы.");
+            savedKey = deviceKey;
+            keyLoaded = true;
+        }
+
+        ValidateKey();
+    }
+
+    private bool TryLoadOrCreateKeyInInstallFolder()
+    {
         try
         {
             if (File.Exists(installKeyPath))
             {
                 savedKey = File.ReadAllText(installKeyPath).Trim();
-                keyLoaded = true;
                 Debug.Log("[AntiPiracy] Найден ключ в папке установки: " + installKeyPath);
+                return true;
             }
-            else
-            {
-                File.WriteAllText(installKeyPath, deviceKey);
-                savedKey = deviceKey;
-                keyLoaded = true;
-                Debug.Log("[AntiPiracy] Создан ключ в папке установки: " + installKeyPath);
-            }
+
+            File.WriteAllText(installKeyPath, deviceKey);
+            savedKey = deviceKey;
+
+            Debug.Log("[AntiPiracy] Создан ключ в папке установки: " + installKeyPath);
+            return true;
         }
         catch (Exception e)
         {
-            Debug.LogWarning("[AntiPiracy] Нет доступа к папке установки: " + e.Message);
-        }
-
-        // 2) Если не получилось с installKeyPath — пробуем persistentDataPath
-        if (!keyLoaded)
-        {
-            try
-            {
-                if (File.Exists(userKeyPath))
-                {
-                    savedKey = File.ReadAllText(userKeyPath).Trim();
-                    Debug.Log("[AntiPiracy] Найден ключ в папке пользователя: " + userKeyPath);
-                }
-                else
-                {
-                    File.WriteAllText(userKeyPath, deviceKey);
-                    savedKey = deviceKey;
-                    Debug.Log("[AntiPiracy] Создан ключ в папке пользователя: " + userKeyPath);
-                }
-
-                keyLoaded = true;
-            }
-            catch (Exception e)
-            {
-                Debug.LogError("[AntiPiracy] Не удалось создать/прочитать ключ вообще: " + e.Message);
-                // Чтобы не заблокировать игру из-за проблем с файловой системой,
-                // считаем текущее устройство "правильным".
-                savedKey = deviceKey;
-                keyLoaded = true;
-            }
-        }
-
-        // 3) Проверяем ключ
-        if (savedKey != deviceKey)
-        {
-            Debug.LogError("Пиратская версия! Ключ не совпадает.");
-            ShowPiracyWarning();
-        }
-        else
-        {
-            Debug.Log("Игра запущена на авторизованном устройстве.");
+            Debug.LogWarning("[AntiPiracy] Нет доступа к папке установки. Будет использован persistentDataPath. Причина: " + e.Message);
+            return false;
         }
     }
 
-    // Метод для вывода стандартного окна Windows
-    void ShowPiracyWarning()
+    private bool TryLoadOrCreateKeyInPersistentFolder()
+    {
+        try
+        {
+            if (File.Exists(userKeyPath))
+            {
+                savedKey = File.ReadAllText(userKeyPath).Trim();
+                Debug.Log("[AntiPiracy] Найден ключ в пользовательской папке: " + userKeyPath);
+                return true;
+            }
+
+            File.WriteAllText(userKeyPath, deviceKey);
+            savedKey = deviceKey;
+
+            Debug.Log("[AntiPiracy] Создан ключ в пользовательской папке: " + userKeyPath);
+            return true;
+        }
+        catch (Exception e)
+        {
+            Debug.LogError("[AntiPiracy] Не удалось создать или прочитать ключ в persistentDataPath: " + e.Message);
+            return false;
+        }
+    }
+
+    private void ValidateKey()
+    {
+        if (savedKey == deviceKey)
+        {
+            Debug.Log("[AntiPiracy] Игра запущена на авторизованном устройстве.");
+            return;
+        }
+
+        Debug.LogError("[AntiPiracy] Обнаружено несовпадение ключа устройства.");
+        ShowPiracyWarning();
+    }
+
+    private void ShowPiracyWarning()
     {
 #if UNITY_STANDALONE_WIN
-        // В Editor под Windows тоже сработает
         NativeWinAlert.Error(
             "Warning! You are using a pirated version of the game!\nThe game will be closed.",
             "Pirated version detected"
         );
 #else
-        Debug.LogError("Pirated version detected. Quitting.");
+        Debug.LogError("[AntiPiracy] Pirated version detected.");
 #endif
 
-        Application.Quit(); // Завершаем работу приложения
+        if (quitApplicationOnPiracyDetected)
+        {
+            Application.Quit();
+        }
     }
 }
 
-// Класс для Windows MessageBox
+#if UNITY_STANDALONE_WIN
 public static class NativeWinAlert
 {
     [DllImport("user32.dll", SetLastError = true)]
@@ -117,12 +148,12 @@ public static class NativeWinAlert
     {
         try
         {
-            // 0x00000010L = MB_ICONERROR
-            MessageBox(GetActiveWindow(), text, caption, (uint)(0x00000010L));
+            MessageBox(GetActiveWindow(), text, caption, 0x00000010);
         }
         catch (Exception ex)
         {
-            Debug.LogError("Ошибка при вызове MessageBox: " + ex.Message);
+            Debug.LogError("[NativeWinAlert] Ошибка при вызове Windows MessageBox: " + ex.Message);
         }
     }
 }
+#endif

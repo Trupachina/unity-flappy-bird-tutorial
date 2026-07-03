@@ -1,71 +1,149 @@
 using UnityEngine;
 using UnityEngine.SceneManagement;
+
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
 using System.IO.Ports;
+#endif
 
 public class VideoSceneManager : MonoBehaviour
 {
-    private const string StartSceneName = "Flappy Bird";
-    public string comPort = "COM3";
+    [Header("Scene Settings")]
+    [SerializeField] private string startSceneName = "Flappy Bird";
+
+    [Header("Serial Port Settings")]
+    [SerializeField] private string comPort = "COM3";
+    [SerializeField] private int baudRate = 9600;
+
+    [Header("Platform Settings")]
+    [SerializeField] private bool enableSerialPortOnSupportedPlatforms = true;
+
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
     private SerialPort portNo;
+#endif
+
     private bool portIsOpen = false;
 
     private void OnEnable()
     {
-        portNo = new SerialPort(comPort, 9600);
-        try
+        if (!ShouldUseSerialPortOnThisRun())
         {
-            portNo.Open();
-            portNo.ReadTimeout = 1000;
-            portIsOpen = true;
-            Debug.Log("Serial Port открыт для монетоприемника.");
+            Debug.Log("[VideoSceneManager] COM-порт отключён для текущей платформы или режима запуска.");
+            return;
         }
-        catch (System.Exception ex)
-        {
-            Debug.LogError("Ошибка при открытии порта для монетоприемника: " + ex.Message);
-        }
+
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+        OpenSerialPort();
+#endif
     }
 
     private void OnDisable()
     {
-        if (portNo != null && portNo.IsOpen)
-        {
-            portNo.Close();
-            Debug.Log("Serial Port закрыт при смене сцены.");
-        }
+        CloseSerialPort();
     }
 
-    void Update()
+    private bool ShouldUseSerialPortOnThisRun()
     {
-        if (Input.GetKeyDown(KeyCode.Space))
+        if (!enableSerialPortOnSupportedPlatforms)
         {
-            SceneManager.LoadScene(StartSceneName);
+            return false;
+        }
+
+#if UNITY_ANDROID
+        return false;
+#elif UNITY_EDITOR
+        if (UnityEditor.EditorUserBuildSettings.activeBuildTarget == UnityEditor.BuildTarget.Android)
+        {
+            return false;
+        }
+
+        return true;
+#elif UNITY_STANDALONE_WIN
+        return true;
+#else
+        return false;
+#endif
+    }
+
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+    private void OpenSerialPort()
+    {
+        try
+        {
+            portNo = new SerialPort(comPort, baudRate)
+            {
+                ReadTimeout = 1000
+            };
+
+            portNo.Open();
+            portIsOpen = true;
+
+            Debug.Log($"[VideoSceneManager] Serial Port открыт: {comPort}");
+        }
+        catch (System.Exception ex)
+        {
+            portIsOpen = false;
+            Debug.LogError($"[VideoSceneManager] Ошибка при открытии порта {comPort}: {ex.Message}");
+        }
+    }
+#endif
+
+    private void Update()
+    {
+        if (IsJumpPressed())
+        {
+            SceneManager.LoadScene(startSceneName);
+            return;
         }
 
         if (Input.GetKeyDown(KeyCode.L))
         {
             LoadStartSceneWithLife();
+            return;
         }
 
-        if (portIsOpen)
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+        ReadSerialPortIfAvailable();
+#endif
+    }
+
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+    private void ReadSerialPortIfAvailable()
+    {
+        if (!ShouldUseSerialPortOnThisRun())
         {
-            try
-            {
-                if (portNo.BytesToRead > 0)
-                {
-                    int portValue = portNo.ReadByte();
-                    Debug.Log("Получен байт от монетоприемника: " + portValue);
+            return;
+        }
 
-                    if (portValue == 1)
-                    {
-                        LoadStartSceneWithLife();
-                    }
-                }
-            }
-            catch (System.Exception ex)
+        if (!portIsOpen || portNo == null || !portNo.IsOpen)
+        {
+            return;
+        }
+
+        try
+        {
+            if (portNo.BytesToRead <= 0)
             {
-                Debug.LogError("Ошибка при чтении порта: " + ex.Message);
+                return;
+            }
+
+            int portValue = portNo.ReadByte();
+            Debug.Log($"[VideoSceneManager] Получен байт от монетоприёмника: {portValue}");
+
+            if (portValue == 1)
+            {
+                LoadStartSceneWithLife();
             }
         }
+        catch (System.Exception ex)
+        {
+            Debug.LogError($"[VideoSceneManager] Ошибка при чтении порта: {ex.Message}");
+        }
+    }
+#endif
+
+    private bool IsJumpPressed()
+    {
+        return Input.GetKeyDown(KeyCode.Space) || Input.GetMouseButtonDown(0);
     }
 
     private void LoadStartSceneWithLife()
@@ -75,12 +153,33 @@ public class VideoSceneManager : MonoBehaviour
 
         try
         {
-            Debug.Log("Переключение на стартовую сцену с дополнительной жизнью...");
-            SceneManager.LoadScene(StartSceneName);
+            Debug.Log("[VideoSceneManager] Переход на стартовую сцену с дополнительной жизнью.");
+            SceneManager.LoadScene(startSceneName);
         }
         catch (System.Exception ex)
         {
-            Debug.LogError($"Ошибка при загрузке стартовой сцены '{StartSceneName}': {ex.Message}");
+            Debug.LogError($"[VideoSceneManager] Ошибка при загрузке сцены '{startSceneName}': {ex.Message}");
         }
+    }
+
+    private void CloseSerialPort()
+    {
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+        try
+        {
+            if (portNo != null && portNo.IsOpen)
+            {
+                portNo.Close();
+                portNo.Dispose();
+                Debug.Log("[VideoSceneManager] Serial Port закрыт.");
+            }
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogWarning($"[VideoSceneManager] Ошибка при закрытии порта: {ex.Message}");
+        }
+#endif
+
+        portIsOpen = false;
     }
 }
